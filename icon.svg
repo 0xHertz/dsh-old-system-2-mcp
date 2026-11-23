@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="MCP configuration">
+  <defs>
+    <linearGradient id="bg" x1="16" y1="8" x2="112" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f2a4a"/>
+      <stop offset="1" stop-color="#0b6b6b"/>
+    </linearGradient>
+    <linearGradient id="node" x1="40" y1="40" x2="88" y2="88" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8fe3ff"/>
+      <stop offset="1" stop-color="#5ee0c0"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bg)"/>
+  <g fill="none" stroke="#d6f6ff" stroke-opacity="0.55" stroke-width="4" stroke-linecap="round">
+    <path d="M44 46 64 64 84 46"/>
+    <path d="M64 64v18"/>
+  </g>
+  <g fill="url(#node)">
+    <circle cx="44" cy="44" r="11"/>
+    <circle cx="84" cy="44" r="11"/>
+    <circle cx="64" cy="86" r="11"/>
+  </g>
+  <circle cx="64" cy="64" r="9" fill="#0b2f3a"/>
+  <circle cx="64" cy="64" r="4.5" fill="#8fe3ff"/>
+</svg>

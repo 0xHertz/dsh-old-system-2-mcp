@@ -1,0 +1,3 @@
+- insert:
+    - id: mcp-gui
+      name: '@local/dsh-mcp-gui'
