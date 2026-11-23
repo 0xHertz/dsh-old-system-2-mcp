@@ -1,11 +1,11 @@
-# MCP 配置插件 1.0.10 — 离线安装
+# 外部系统连接插件 1.0.12 — 离线安装
 
 ## 包内容
 
 | 文件 | 用途 |
 |---|---|
-| `dsh-mcp-gui-1.0.10.tgz` | **推荐**。npm 包格式，插件管理器可直接从本地 tarball 安装 |
-| `dsh-mcp-gui-1.0.10.zip` | 同样的包文件，解压后以目录方式安装（适合只接受目录的界面） |
+| `dsh-mcp-gui-1.0.12.tgz` | **推荐**。npm 包格式，插件管理器可直接从本地 tarball 安装 |
+| `dsh-mcp-gui-1.0.12.zip` | 同样的包文件，解压后以目录方式安装（适合只接受目录的界面） |
 | `INSTALL-OFFLINE.md` | 本说明 |
 | `SHA256SUMS` | 校验和 |
 
@@ -18,22 +18,22 @@
 
 ## 方式 A：Web 界面安装（推荐）
 
-1. 把 `dsh-mcp-gui-1.0.10.tgz` 拷到目标机器。
+1. 把 `dsh-mcp-gui-1.0.12.tgz` 拷到目标机器。
 2. 打开 DSH Web → 左下角 **设置** → **插件**。
 3. 选择 **添加插件 / Add plugin**，填入 tarball 的**绝对路径**：
    ```
-   /absolute/path/to/dsh-mcp-gui-1.0.10.tgz
+   /absolute/path/to/dsh-mcp-gui-1.0.12.tgz
    ```
-4. 安装完成后确认 **MCP 配置** 已启用；刷新页面，侧边栏出现 **MCP**。
-5. 如果当前界面的添加插件只接受目录：解压 zip（或 `tar -xzf dsh-mcp-gui-1.0.10.tgz` 得到 `package/`），在添加插件里选择包含 `package.json` 的目录。
+4. 安装完成后确认 **外部系统连接** 已启用；刷新页面，侧边栏出现 **外部系统连接**。
+5. 如果当前界面的添加插件只接受目录：解压 zip（或 `tar -xzf dsh-mcp-gui-1.0.12.tgz` 得到 `package/`），在添加插件里选择包含 `package.json` 的目录。
 
 ## 方式 B：命令行安装
 
 ```bash
-dsh plugin --profile <profile> add /absolute/path/to/dsh-mcp-gui-1.0.10.tgz
+dsh plugin --profile <profile> add /absolute/path/to/dsh-mcp-gui-1.0.12.tgz
 ```
 
-`dsh plugin add` 只把包加入 profile 依赖；如果启动后没有自动出现在侧边栏，请在 **设置 → 插件** 中启用 **MCP 配置**，或把 `@local/dsh-mcp-gui` 加入目标 profile 的 `package.json`：
+`dsh plugin add` 只把包加入 profile 依赖；如果启动后没有自动出现在侧边栏，请在 **设置 → 插件** 中启用 **外部系统连接**，或把 `@local/dsh-mcp-gui` 加入目标 profile 的 `package.json`：
 
 ```json
 {
@@ -54,19 +54,19 @@ dsh plugin --profile <profile> add /absolute/path/to/dsh-mcp-gui-1.0.10.tgz
 如果目标机器上的 Agent 有 `plugin_manager` 工具，也可以直接执行：
 
 ```
-plugin_manager install_bundle target=/absolute/path/to/dsh-mcp-gui-1.0.10.tgz
+plugin_manager install_bundle target=/absolute/path/to/dsh-mcp-gui-1.0.12.tgz
 ```
 
 ## 离线验证
 
 - 插件包**没有 dependencies / peerDependencies**，`pnpm add` 不需要访问 registry。
 - 已在本地用 `pnpm add --offline` 以及一个不可达的 registry（`--registry http://127.0.0.1:1/`）验证：两种方式都能完成安装。
-- 安装后未认证访问 `http://127.0.0.1:3080/mcp-gui/api/state` 返回 `401`，说明 Host 路由已挂载；侧边栏出现 `MCP`（order 5）说明客户端模块已注册。
+- 安装后未认证访问 `http://127.0.0.1:3080/mcp-gui/api/state` 返回 `401`，说明 Host 路由已挂载；侧边栏出现 `外部系统连接`（order 5）说明客户端模块已注册。
 
 ## 升级 / 卸载
 
 - **升级**：用新的 tarball 在插件页覆盖安装；若同一版本已安装，管理器可能返回 `already-installed`，先移除再装。
-- **卸载**：设置 → 插件 → 移除 **MCP 配置**。卸载不会自动删除业务数据：
+- **卸载**：设置 → 插件 → 移除 **外部系统连接**。卸载不会自动删除业务数据：
   - 服务定义：`$DSH_HOME/mcp-gui/servers.json`（默认 `~/.dsh/mcp-gui/servers.json`）
   - 凭据：DSH 凭据存储中的 `mcp-gui/<serverId>` 记录
   - 需要彻底清理时手动删除上述数据。
@@ -83,6 +83,6 @@ shasum -a 256 -c SHA256SUMS
 
 ## 版本与限制
 
-- 版本：1.0.10；平台：`web`。
+- 版本：1.0.12；平台：`web`。
 - 登录捕获、自签证书、401 刷新重试等行为与包内的 `README.md` 一致。
 - 若目标 DSH 升级后不再提供 `@modelcontextprotocol/client`，插件会在连接时报告 SDK 加载失败；此时需要匹配版本的插件包或更新插件。

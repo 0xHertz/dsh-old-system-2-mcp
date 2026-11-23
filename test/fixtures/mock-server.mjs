@@ -101,6 +101,15 @@ function mcpTools() {
       inputSchema: { type: 'object', properties: {} },
     },
     {
+      name: 'large',
+      description: 'Return a large text body for result-size tests.',
+      inputSchema: {
+        type: 'object',
+        properties: { count: { type: 'number' } },
+        required: ['count'],
+      },
+    },
+    {
       name: 'fail',
       description: 'Always return an MCP tool error.',
       inputSchema: { type: 'object', properties: {} },
@@ -174,6 +183,11 @@ async function handleMcp(req, res, url) {
       sendJson(res, 200, mcpResult(message.id, { content: [{ type: 'text', text: 'authenticated' }] }))
       return
     }
+    if (name === 'large') {
+      const count = Math.max(0, Math.min(Number(args.count ?? 0), 100_000))
+      sendJson(res, 200, mcpResult(message.id, { content: [{ type: 'text', text: 'x'.repeat(count) }] }))
+      return
+    }
     if (name === 'fail') {
       sendJson(res, 200, mcpResult(message.id, { isError: true, content: [{ type: 'text', text: 'boom' }] }))
       return
@@ -243,6 +257,10 @@ async function handleSseMessage(req, res, sessionId) {
     if (name === 'echo') result = { content: [{ type: 'text', text: String(args.text ?? '') }] }
     else if (name === 'add') result = { content: [{ type: 'text', text: String(Number(args.a ?? 0) + Number(args.b ?? 0)) }] }
     else if (name === 'whoami') result = { content: [{ type: 'text', text: 'authenticated' }] }
+    else if (name === 'large') {
+      const count = Math.max(0, Math.min(Number(args.count ?? 0), 100_000))
+      result = { content: [{ type: 'text', text: 'x'.repeat(count) }] }
+    }
     else result = { isError: true, content: [{ type: 'text', text: `unknown tool ${name}` }] }
   } else {
     sseSend(stream, { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'method not found' } })
@@ -273,6 +291,10 @@ async function handle(req, res) {
       'cache-control': 'no-store',
     })
     res.end(body)
+    return
+  }
+  if (url.pathname === '/empty-token') {
+    sendJson(res, 200, { access_token: '' })
     return
   }
   if (url.pathname === '/no-bearer-token') {

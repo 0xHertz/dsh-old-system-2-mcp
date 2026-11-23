@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-mcp-gui",
-  "version": "1.0.10",
+  "version": "1.0.12",
   "private": true,
   "type": "module",
   "description": "Graphical external system connections (MCP) for DeepSeek Harness: server CRUD, connection tests, browser login capture, custom CA, and automatic credential refresh.",

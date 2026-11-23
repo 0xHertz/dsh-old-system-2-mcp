@@ -217,6 +217,7 @@ function extractFromJson(value, depth = 0) {
   if (depth > 4 || value === null || typeof value !== 'object') return {}
   const capture = {}
   const assign = (key, raw) => {
+    if ((key === 'access_token' || key === 'accessToken') && String(raw) === '') return
     if (key === 'access_token' || key === 'accessToken') capture.accessToken = String(raw)
     else if (key === 'refresh_token' || key === 'refreshToken') capture.refreshToken = String(raw)
     else if (key === 'id_token' || key === 'idToken') capture.idToken = String(raw)
@@ -607,6 +608,7 @@ export class LoginCaptureManager {
 
   /** Close one session's loopback listener. */
   closeSession(session) {
+    session.canceled = true
     const server = session.server
     session.server = undefined
     if (server !== undefined) server.close()
@@ -826,6 +828,7 @@ export class LoginCaptureManager {
 
   /** Merge captured fields, persist through the callback, and update status. */
   async captureFromSession(session, capture) {
+    if (session.canceled === true) return
     const cookieAllowed = capture.force === true || session.loginAttempted === true || typeof capture.cookie === 'string'
       && (capture.authorization !== undefined || capture.accessToken !== undefined)
     let cookie = capture.cookie
@@ -840,8 +843,13 @@ export class LoginCaptureManager {
     }
     if (typeof capture.accessToken === 'string' && capture.accessToken !== '') {
       session.accessToken = capture.accessToken
-      if (capture.authorization === undefined && typeof capture.tokenType === 'string' && capture.tokenType !== '') {
-        session.lastAuthorization = `${capture.tokenType} ${capture.accessToken}`
+      if (capture.authorization === undefined) {
+        if (typeof capture.tokenType === 'string' && capture.tokenType !== '') {
+          session.lastAuthorization = `${capture.tokenType} ${capture.accessToken}`
+        } else {
+          const previousToken = /^(?:Bearer|Token)\s+(.+)$/i.exec(session.lastAuthorization)?.[1]
+          if (previousToken !== capture.accessToken) session.lastAuthorization = ''
+        }
       }
     }
     if (typeof capture.refreshToken === 'string' && capture.refreshToken !== '') session.refreshToken = capture.refreshToken
@@ -857,7 +865,7 @@ export class LoginCaptureManager {
     const headers = {}
     if (session.lastAuthorization !== '') headers.Authorization = session.lastAuthorization
     if (cookieAllowed && session.lastCookie !== '') headers.Cookie = session.lastCookie
-    const hasCredential = Object.keys(headers).length > 0 || typeof capture.accessToken === 'string'
+    const hasCredential = Object.keys(headers).length > 0 || session.accessToken !== ''
     if (!hasCredential) return
     session.status = 'captured'
     session.capturedAt = Date.now()

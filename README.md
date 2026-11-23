@@ -87,6 +87,12 @@
   - **令牌前缀**：例如 `Bearer `（注意尾随空格）或留空表示直接发送 token。
 - 留空“令牌请求头”时，只保存 token 元数据，不生成 Authorization；这避免把普通 session token 误发成 Bearer。
 
+## 工具结果长度
+
+MCP 工具结果不会被插件截断到固定字符数。插件只对结果做敏感值脱敏，不再对脱敏后的文本做 6000 字符截断；大结果会完整返回给 DSH。若最终在模型上下文里看到压缩或省略，那是会话上下文的长度管理，不是插件截断。
+
+DSH 自带的 `@deepseek-ai/dsh-compaction-tool-result-pruner` 另有一套上下文保护：只在压缩触发时，把超过默认 8192 字符的工具结果裁成“头部 + `[... tool result middle pruned ...]` + 尾部”，原始结果仍保留在会话日志。它不是本插件，若需要调整应改 profile 里 `tool-result-pruner` 行的 `thresholdChars`/`headChars`/`tailChars` 或停用该行。
+
 ## 自动续期的限制
 
 - 没有 `refresh_token` 的登录会话（例如纯 Cookie 或一次性 token）无法静默续期；token 过期后会提示重新登录。这是浏览器登录捕获模式本身的限制。

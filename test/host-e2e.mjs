@@ -186,6 +186,13 @@ try {
   const echoResult = await echo.execute({ text: 'hello' }, { signal: AbortSignal.timeout(5_000) })
   check('echo tool returns text', echoResult === 'hello', echoResult)
 
+  const largeTool = tools.get('mcp__demo__large')
+  check('large tool is registered', largeTool !== undefined)
+  if (largeTool !== undefined) {
+    const largeResult = await largeTool.execute({ count: 20_000 }, { signal: AbortSignal.timeout(5_000) })
+    check('large tool result is not truncated', largeResult.length === 20_000 && largeResult === 'x'.repeat(20_000), `${largeResult.length}`)
+  }
+
   const failTool = tools.get('mcp__demo__fail')
   let failMessage = ''
   try {
@@ -533,6 +540,22 @@ try {
   await controller.deleteServer(gbkServer.id)
 
   // 2b-6. A generic token without token_type is not mislabeled as Bearer.
+  const emptyToken = await controller.saveServer({
+    server: {
+      name: 'empty-token',
+      enabled: false,
+      transport: 'streamable-http',
+      url: `${servers.httpOrigin}/mcp`,
+      headers: [],
+      auth: { mode: 'login', loginUrl: `${servers.httpOrigin}/login` },
+      tls: { mode: 'default' },
+    },
+  })
+  const emptyTokenStart = await controller.startLogin(emptyToken.id)
+  await fetch(`http://127.0.0.1:${new URL(emptyTokenStart.url).port}/empty-token`, { method: 'POST' })
+  check('empty access_token is not treated as a credential', controller.loginStatus(emptyTokenStart.id).status !== 'captured' && records.get(`mcp-gui/${emptyToken.id}`) === undefined, JSON.stringify(controller.loginStatus(emptyTokenStart.id)))
+  await controller.deleteServer(emptyToken.id)
+
   const noBearer = await controller.saveServer({
     server: {
       name: 'no-bearer',
@@ -570,7 +593,21 @@ try {
   await fetch(`http://127.0.0.1:${configuredPort}/no-bearer-token`, { method: 'POST' })
   const configuredRecord = records.get(`mcp-gui/${noBearer.id}`)
   check('configured token header is used instead of Bearer', configuredRecord?.payload?.headers?.['X-Token'] === 'custom-session-token-1234567890' && configuredRecord?.payload?.headers?.Authorization === undefined, JSON.stringify(configuredRecord))
-  await controller.deleteServer(noBearer.id)
+  const configuredAuthorization = await controller.saveServer({
+    server: {
+      id: noBearer.id,
+      name: noBearer.name,
+      enabled: false,
+      transport: 'streamable-http',
+      url: noBearer.url,
+      headers: [],
+      auth: { mode: 'login', loginUrl: `${servers.httpOrigin}/login`, tokenHeader: 'Authorization', tokenPrefix: 'Bearer ' },
+      tls: { mode: 'default' },
+    },
+  })
+  const configuredAuthorizationRecord = records.get(`mcp-gui/${noBearer.id}`)
+  check('configured Authorization prefix keeps its trailing space', configuredAuthorizationRecord?.payload?.headers?.Authorization === 'Bearer custom-session-token-1234567890' && configuredAuthorizationRecord?.payload?.headers?.['X-Token'] === undefined, JSON.stringify(configuredAuthorizationRecord))
+  await controller.deleteServer(configuredAuthorization.id)
 
   // 2c. Re-saving the login server must keep captured headers.
   await controller.saveServer({

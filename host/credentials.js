@@ -30,6 +30,12 @@ function jsonSafe(value) {
   return result
 }
 
+/** Delete a header case-insensitively (Node lowercases incoming names). */
+function deleteHeader(headers, name) {
+  const lower = name.toLowerCase()
+  for (const key of Object.keys(headers)) if (key.toLowerCase() === lower) delete headers[key]
+}
+
 /** The empty payload shape. */
 function emptyPayload() {
   return { headers: {}, env: {}, auth: undefined }
@@ -197,7 +203,10 @@ export class AuthState {
         return false
       }
       const body = response.body
-      if (!response.ok || typeof body?.access_token !== 'string') {
+      const accessToken = typeof body?.access_token === 'string' && body.access_token !== ''
+        ? body.access_token
+        : typeof body?.token === 'string' && body.token !== '' ? body.token : undefined
+      if (!response.ok || accessToken === undefined) {
         this.needsLogin = true
         const detail = typeof body?.error_description === 'string'
           ? body.error_description
@@ -205,7 +214,6 @@ export class AuthState {
         this.lastError = this.redact(`刷新认证失败：${detail}`)
         return false
       }
-      const accessToken = body.access_token
       const tokenHeader = typeof this.server.auth?.tokenHeader === 'string' ? this.server.auth.tokenHeader : ''
       const tokenPrefix = typeof this.server.auth?.tokenPrefix === 'string' ? this.server.auth.tokenPrefix : ''
       const tokenType = typeof body.token_type === 'string' && body.token_type !== ''
@@ -221,8 +229,14 @@ export class AuthState {
         expiresAt: expiryFrom(body, accessToken),
       }
       this.headers = { ...this.headers }
-      if (tokenHeader !== '') this.headers[tokenHeader] = `${tokenPrefix}${accessToken}`
-      else if (tokenType !== undefined) this.headers.Authorization = `${tokenType} ${accessToken}`
+      if (tokenHeader !== '') {
+        if (!/^authorization$/i.test(tokenHeader)) deleteHeader(this.headers, 'authorization')
+        deleteHeader(this.headers, tokenHeader)
+        this.headers[tokenHeader] = `${tokenPrefix}${accessToken}`
+      } else if (tokenType !== undefined) {
+        deleteHeader(this.headers, 'authorization')
+        this.headers.Authorization = `${tokenType} ${accessToken}`
+      }
       this.needsLogin = false
       this.lastError = ''
       this.remember({ headers: this.headers, env: this.env, auth: this.meta })
@@ -254,14 +268,15 @@ export class AuthState {
    * @param {{headers?:Record<string,string>, accessToken?:string, tokenType?:string, refreshToken?:string, refreshUrl?:string, expiresIn?:number, expiresAt?:number, clientId?:string, source?:string}} capture
    */
   async applyCapture(capture) {
+    const configuredTokenHeader = typeof this.server.auth?.tokenHeader === 'string' ? this.server.auth.tokenHeader : ''
     const headers = { ...this.headers }
     for (const name of Object.keys(headers)) {
       if (/^(?:authorization|cookie)$/i.test(name)) delete headers[name]
+      else if (configuredTokenHeader !== '' && name.toLowerCase() === configuredTokenHeader.toLowerCase()) delete headers[name]
     }
     for (const [name, value] of Object.entries(capture.headers ?? {})) {
       if (typeof value === 'string' && value !== '') headers[name] = value
     }
-    const configuredTokenHeader = typeof this.server.auth?.tokenHeader === 'string' ? this.server.auth.tokenHeader : ''
     const configuredTokenPrefix = typeof this.server.auth?.tokenPrefix === 'string' ? this.server.auth.tokenPrefix : ''
     if (typeof capture.accessToken === 'string' && capture.accessToken !== '') {
       if (configuredTokenHeader !== '') {
@@ -273,6 +288,10 @@ export class AuthState {
     const accessToken = typeof capture.accessToken === 'string' && capture.accessToken !== ''
       ? capture.accessToken
       : tokenFromHeaders(headers)
+    if (configuredTokenHeader !== '' && accessToken !== undefined) {
+      if (!/^authorization$/i.test(configuredTokenHeader)) delete headers.Authorization
+      headers[configuredTokenHeader] = `${configuredTokenPrefix}${accessToken}`
+    }
     const tokenType = typeof capture.tokenType === 'string' && capture.tokenType !== ''
       ? capture.tokenType
       : /^([A-Za-z]+)\s+/.exec(headers.Authorization ?? '')?.[1]
@@ -315,7 +334,8 @@ export class AuthState {
     const header = typeof this.server.auth?.tokenHeader === 'string' ? this.server.auth.tokenHeader : ''
     if (typeof accessToken !== 'string' || accessToken === '' || header === '') return
     const prefix = typeof this.server.auth?.tokenPrefix === 'string' ? this.server.auth.tokenPrefix : ''
-    if (!/^authorization$/i.test(header)) delete this.headers.Authorization
+    if (!/^authorization$/i.test(header)) deleteHeader(this.headers, 'authorization')
+    deleteHeader(this.headers, header)
     this.headers = { ...this.headers, [header]: `${prefix}${accessToken}` }
     const scheme = prefix.trim()
     if (/^[A-Za-z]+$/.test(scheme)) this.meta = { ...this.meta, tokenType: scheme }
@@ -361,10 +381,10 @@ export class AuthState {
    */
   async resetCapture() {
     const headers = { ...this.headers }
-    delete headers.Authorization
-    delete headers.Cookie
+    deleteHeader(headers, 'authorization')
+    deleteHeader(headers, 'cookie')
     const tokenHeader = typeof this.server.auth?.tokenHeader === 'string' ? this.server.auth.tokenHeader : ''
-    if (tokenHeader !== '' && !/^(?:authorization|cookie)$/i.test(tokenHeader)) delete headers[tokenHeader]
+    if (tokenHeader !== '' && !/^(?:authorization|cookie)$/i.test(tokenHeader)) deleteHeader(headers, tokenHeader)
     this.headers = headers
     this.meta = undefined
     this.needsLogin = false
@@ -406,12 +426,14 @@ export class AuthState {
 
 /** Compute an absolute expiry from a token response. */
 export function expiryFrom(body, accessToken) {
-  if (typeof body?.expires_in === 'number' && Number.isFinite(body.expires_in)) {
-    return Date.now() + Math.max(0, body.expires_in) * 1000
-  }
-  if (typeof body?.expires_at === 'number' && Number.isFinite(body.expires_at)) {
-    return body.expires_at < 10_000_000_000 ? body.expires_at * 1000 : body.expires_at
-  }
+  const expiresIn = typeof body?.expires_in === 'number' || typeof body?.expires_in === 'string'
+    ? Number(body.expires_in)
+    : Number.NaN
+  if (Number.isFinite(expiresIn)) return Date.now() + Math.max(0, expiresIn) * 1000
+  const expiresAt = typeof body?.expires_at === 'number' || typeof body?.expires_at === 'string'
+    ? Number(body.expires_at)
+    : Number.NaN
+  if (Number.isFinite(expiresAt)) return expiresAt < 10_000_000_000 ? expiresAt * 1000 : expiresAt
   return decodeJwtExpiry(accessToken)
 }
 

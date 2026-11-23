@@ -161,6 +161,11 @@ export class McpGuiController {
         ? (staticReady ? 'captured' : 'none')
         : auth?.needsLogin === true ? 'expired' : loginCaptured ? 'captured' : 'none'
     const projectedHeaders = auth?.requestHeaders() ?? {}
+    const projectedHeader = (name) => Object.entries(projectedHeaders)
+      .find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1]
+    const customTokenValue = typeof server.auth.tokenHeader === 'string' && server.auth.tokenHeader !== ''
+      ? projectedHeader(server.auth.tokenHeader)
+      : undefined
     const expiresAt = mode === 'login' ? (auth?.meta?.expiresAt ?? server.auth.expiresAt) : undefined
     return {
       id: server.id,
@@ -186,7 +191,7 @@ export class McpGuiController {
         capturedAt: server.auth.capturedAt,
         expiresAt,
         hasRefreshToken: mode === 'login' && auth?.canRefresh() === true,
-        masked: maskSecret(projectedHeaders.Authorization ?? projectedHeaders.Cookie ?? ''),
+        masked: maskSecret(projectedHeader('authorization') ?? projectedHeader('cookie') ?? customTokenValue ?? ''),
         headerNames: Object.keys(projectedHeaders),
         lastError: this.redact(auth?.lastError || server.auth.lastError || ''),
         capturedHeaders: Object.entries(auth?.rawHeaders() ?? {}).map(([name, value]) => ({

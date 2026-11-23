@@ -63,10 +63,16 @@ export function redactSecrets(text, secrets) {
   let result = text
   for (const value of values) {
     result = result.split(value).join('[redacted]')
-    const encoded = encodeURIComponent(value)
-    if (encoded !== value) result = result.split(encoded).join('[redacted]')
+    try {
+      const encoded = encodeURIComponent(value)
+      if (encoded !== value) result = result.split(encoded).join('[redacted]')
+    } catch {
+      // A malformed Unicode secret still has its literal form redacted above.
+    }
   }
-  return result.length > 6000 ? `${result.slice(0, 6000)}…` : result
+  // Do not truncate here: this function is also on the MCP tool-result path.
+  // Callers that need a short diagnostic use summarize() explicitly.
+  return result
 }
 
 /** Expiry (ms since epoch) carried by a JWT, or undefined. */
@@ -280,6 +286,7 @@ export function normalizeServer(input, existingServers, previous) {
     if (tokenHeader !== '' && !HEADER_NAME_PATTERN.test(tokenHeader)) errors.push('令牌请求头名不合法')
     if (tokenHeader === '' && tokenPrefix !== '') errors.push('填写令牌前缀前需要先填写令牌请求头')
     if (Buffer.byteLength(tokenPrefix) > 256) errors.push('令牌前缀超过 256 字节')
+    if (/[\r\n]/.test(tokenPrefix)) errors.push('令牌前缀不能包含换行')
   }
 
   const tlsInput = isPlainObject(input.tls) ? input.tls : {}
