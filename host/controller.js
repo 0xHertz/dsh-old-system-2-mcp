@@ -1,11 +1,11 @@
 /** Management controller: document, credential records, runtimes, login capture, API. */
 
 import { dataDirectory, loadDocument, saveDocument } from './store.js'
-import { AuthState } from './credentials.js'
+import { AuthState, groupCredentialKeyFor } from './credentials.js'
 import { McpRuntime, probeServerConfig } from './mcp-runtime.js'
 import { LoginCaptureManager } from './login-capture.js'
 import {
-  ApiError, asString, isPlainObject, maskSecret, normalizeServer, projectHeaders, redactSecrets, summarize, toApiError,
+  ApiError, asString, isPlainObject, maskSecret, normalizeGroup, normalizeServer, projectHeaders, redactSecrets, summarize, toApiError,
 } from './util.js'
 
 const MAX_VALUE_BYTES = 16 * 1024
@@ -37,10 +37,11 @@ export class McpGuiController {
   constructor(ctx) {
     this.ctx = ctx
     this.logger = ctx.logger
-    this.document = { version: 1, servers: [] }
+    this.document = { version: 2, groups: [], servers: [] }
     this.dataDir = ''
     this.runtimes = new Map()
     this.auths = new Map()
+    this.groupAuths = new Map()
     this.operation = Promise.resolve()
     this.disposed = false
     this.loginManager = new LoginCaptureManager({
@@ -61,6 +62,9 @@ export class McpGuiController {
     for (const auth of this.auths.values()) {
       for (const value of auth.secrets()) secrets.add(value)
     }
+    for (const auth of this.groupAuths.values()) {
+      for (const value of auth.secrets()) secrets.add(value)
+    }
     return secrets
   }
 
@@ -75,12 +79,19 @@ export class McpGuiController {
   async initialize() {
     this.dataDir = dataDirectory()
     this.document = await loadDocument(this.dataDir)
-    this.logger.info(`mcp-gui: 已加载 ${this.document.servers.length} 个 MCP 服务定义（${this.dataDir}）`)
+    this.logger.info(`mcp-gui: 已加载 ${this.document.servers.length} 个 MCP 服务定义、${this.document.groups.length} 个组（${this.dataDir}）`)
     void this.startEnabled()
   }
 
   /** Load every credential state and start every enabled server. */
   async startEnabled() {
+    for (const group of this.document.groups) {
+      try {
+        await this.ensureGroupAuth(group)
+      } catch (error) {
+        this.logger.warn(this.redact(`mcp-gui 组(${group.name}): 凭据加载失败：${error instanceof Error ? error.message : String(error)}`))
+      }
+    }
     const tasks = this.document.servers.map(async (server) => {
       try {
         await this.ensureAuth(server)
@@ -113,17 +124,47 @@ export class McpGuiController {
   /** Ensure one runtime exists and starts. */
   async ensureRuntime(server) {
     if (this.disposed || server.enabled === false) return undefined
-    const auth = await this.ensureAuth(server)
+    const group = server.groupId ? this.findGroup(server.groupId) : undefined
+    if (server.groupId && group === undefined) throw new Error(`所属组 ${server.groupId} 不存在`)
+    const auth = group === undefined ? await this.ensureAuth(server) : await this.ensureGroupAuth(group)
+    const serviceAuth = group === undefined ? undefined : await this.ensureAuth(server)
+    const extraHeaders = group === undefined ? undefined : () => this.serviceHeaderValues(server, serviceAuth)
     const existing = this.runtimes.get(server.id)
     if (existing !== undefined && existing.server === server) return existing
     if (existing !== undefined) {
       await existing.stop()
       this.runtimes.delete(server.id)
     }
-    const runtime = new McpRuntime({ ctx: this.ctx, server, auth })
+    const runtime = new McpRuntime({ ctx: this.ctx, server, auth, extraHeaders })
     this.runtimes.set(server.id, runtime)
     void runtime.start()
     return runtime
+  }
+
+  /** Reconnect grouped services whose auth just became usable or invalid. */
+  async refreshGroupMembers(group, force = false) {
+    for (const server of this.document.servers.filter((entry) => entry.groupId === group.id)) {
+      if (server.enabled === false) continue
+      if (force) {
+        await this.stopRuntime(server.id)
+        await this.ensureRuntime(server)
+        continue
+      }
+      const runtime = this.runtimes.get(server.id)
+      if (runtime === undefined) await this.ensureRuntime(server)
+      else if (['auth-required', 'error', 'closed', 'reconnecting'].includes(runtime.status.state)) await runtime.restart()
+    }
+  }
+
+  /** Configured non-auth headers for one grouped service. */
+  serviceHeaderValues(server, auth) {
+    const values = {}
+    const raw = auth?.rawHeaders() ?? {}
+    for (const header of server.headers ?? []) {
+      const value = headerValue(raw, header.name)
+      if (typeof value === 'string' && value !== '') values[header.name] = value
+    }
+    return values
   }
 
   /** Stop one runtime. */
@@ -134,9 +175,94 @@ export class McpGuiController {
     await runtime.stop()
   }
 
+  /** A server-like object used to bind one group's shared AuthState. */
+  groupAuthServer(group) {
+    return { id: group.id, name: group.name, auth: group.auth, headers: group.headers, tls: group.tls }
+  }
+
+  /** Find one stored group. */
+  findGroup(id) {
+    return this.document.groups.find((group) => group.id === id)
+  }
+
+  /** Ensure one group's shared credential state exists. */
+  async ensureGroupAuth(group) {
+    const existing = this.groupAuths.get(group.id)
+    if (existing !== undefined) {
+      existing.server = this.groupAuthServer(group)
+      return existing
+    }
+    const auth = new AuthState({
+      ctx: this.ctx,
+      server: this.groupAuthServer(group),
+      redact: (text) => this.redact(text),
+      key: groupCredentialKeyFor(group.id),
+    })
+    await auth.load()
+    this.groupAuths.set(group.id, auth)
+    return auth
+  }
+
+  /** Auth summary shared by a service or a group. */
+  authViewFor(owner, auth, recordKey) {
+    const mode = owner.auth?.mode ?? 'none'
+    const projectedHeaders = auth?.requestHeaders() ?? {}
+    const projectedHeader = (name) => Object.entries(projectedHeaders)
+      .find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1]
+    const configuredHeaders = (owner.headers ?? []).filter((header) => {
+      const value = headerValue(auth?.headers, header.name)
+      return typeof value === 'string' && value !== ''
+    })
+    const staticReady = mode === 'static' && configuredHeaders.length > 0
+    const loginCaptured = mode === 'login' && (owner.auth?.status === 'captured' || auth?.meta !== undefined)
+    const status = mode === 'none'
+      ? 'none'
+      : mode === 'static'
+        ? (staticReady ? 'captured' : 'none')
+        : auth?.needsLogin === true ? 'expired' : loginCaptured ? 'captured' : 'none'
+    const customTokenValue = typeof owner.auth?.tokenHeader === 'string' && owner.auth.tokenHeader !== ''
+      ? projectedHeader(owner.auth.tokenHeader)
+      : undefined
+    return {
+      mode,
+      loginUrl: owner.auth?.loginUrl ?? '',
+      refreshUrl: owner.auth?.refreshUrl ?? '',
+      tokenHeader: owner.auth?.tokenHeader ?? '',
+      tokenPrefix: owner.auth?.tokenPrefix ?? '',
+      status,
+      capturedAt: owner.auth?.capturedAt ?? null,
+      expiresAt: mode === 'login' ? (auth?.meta?.expiresAt ?? owner.auth?.expiresAt) : undefined,
+      hasRefreshToken: mode === 'login' && auth?.canRefresh() === true,
+      masked: maskSecret(projectedHeader('authorization') ?? projectedHeader('cookie') ?? customTokenValue ?? ''),
+      headerNames: Object.keys(projectedHeaders),
+      lastError: this.redact(auth?.lastError || owner.auth?.lastError || ''),
+      capturedHeaders: Object.entries(auth?.rawHeaders() ?? {}).map(([name, value]) => ({
+        name,
+        masked: name.toLowerCase() === 'cookie' ? maskCookie(value) : maskSecret(value),
+        length: typeof value === 'string' ? value.length : 0,
+      })),
+      tokenType: auth?.meta?.tokenType,
+      accessTokenMasked: maskSecret(auth?.meta?.accessToken ?? ''),
+      refreshTokenPresent: typeof auth?.meta?.refreshToken === 'string' && auth.meta.refreshToken !== '',
+      clientId: auth?.meta?.clientId,
+      scope: auth?.meta?.scope,
+      source: auth?.meta?.source,
+      recordKey,
+    }
+  }
+
   /** Public server view without secret values. */
   serverView(server) {
     const auth = this.auths.get(server.id)
+    const group = server.groupId ? this.findGroup(server.groupId) : undefined
+    const effectiveOwner = group === undefined ? server : this.groupAuthServer(group)
+    const effectiveAuth = group === undefined ? auth : this.groupAuths.get(group.id)
+    const authView = this.authViewFor(
+      effectiveOwner,
+      effectiveAuth,
+      group === undefined ? `mcp-gui/${server.id}` : `mcp-gui/group/${group.id}`,
+    )
+    const ownAuth = group === undefined ? undefined : this.authViewFor(server, auth, `mcp-gui/${server.id}`)
     const runtime = this.runtimes.get(server.id)
     const live = runtime?.statusView()
     const headers = server.headers.map((header) => {
@@ -148,28 +274,11 @@ export class McpGuiController {
         ...(header.secret === true ? {} : { value: value ?? '' }),
       }
     })
-    const mode = server.auth.mode
-    const configuredHeaders = server.headers.filter((header) => {
-      const value = headerValue(auth?.headers, header.name)
-      return typeof value === 'string' && value !== ''
-    })
-    const staticReady = mode === 'static' && configuredHeaders.length > 0
-    const loginCaptured = mode === 'login' && (server.auth.status === 'captured' || auth?.meta !== undefined)
-    const authStatus = mode === 'none'
-      ? 'none'
-      : mode === 'static'
-        ? (staticReady ? 'captured' : 'none')
-        : auth?.needsLogin === true ? 'expired' : loginCaptured ? 'captured' : 'none'
-    const projectedHeaders = auth?.requestHeaders() ?? {}
-    const projectedHeader = (name) => Object.entries(projectedHeaders)
-      .find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1]
-    const customTokenValue = typeof server.auth.tokenHeader === 'string' && server.auth.tokenHeader !== ''
-      ? projectedHeader(server.auth.tokenHeader)
-      : undefined
-    const expiresAt = mode === 'login' ? (auth?.meta?.expiresAt ?? server.auth.expiresAt) : undefined
     return {
       id: server.id,
       name: server.name,
+      groupId: server.groupId ?? '',
+      groupName: group?.name ?? '',
       enabled: server.enabled !== false,
       transport: server.transport,
       protocolMode: server.protocolMode ?? 'legacy',
@@ -181,32 +290,8 @@ export class McpGuiController {
       envKeys: [...(server.envKeys ?? [])],
       envSet: Object.fromEntries((server.envKeys ?? []).map((key) => [key, typeof auth?.env[key] === 'string' && auth.env[key] !== ''])),
       headers,
-      auth: {
-        mode: server.auth.mode,
-        loginUrl: server.auth.loginUrl,
-        refreshUrl: server.auth.refreshUrl,
-        tokenHeader: server.auth.tokenHeader ?? '',
-        tokenPrefix: server.auth.tokenPrefix ?? '',
-        status: authStatus,
-        capturedAt: server.auth.capturedAt,
-        expiresAt,
-        hasRefreshToken: mode === 'login' && auth?.canRefresh() === true,
-        masked: maskSecret(projectedHeader('authorization') ?? projectedHeader('cookie') ?? customTokenValue ?? ''),
-        headerNames: Object.keys(projectedHeaders),
-        lastError: this.redact(auth?.lastError || server.auth.lastError || ''),
-        capturedHeaders: Object.entries(auth?.rawHeaders() ?? {}).map(([name, value]) => ({
-          name,
-          masked: name.toLowerCase() === 'cookie' ? maskCookie(value) : maskSecret(value),
-          length: typeof value === 'string' ? value.length : 0,
-        })),
-        tokenType: auth?.meta?.tokenType,
-        accessTokenMasked: maskSecret(auth?.meta?.accessToken ?? ''),
-        refreshTokenPresent: typeof auth?.meta?.refreshToken === 'string' && auth.meta.refreshToken !== '',
-        clientId: auth?.meta?.clientId,
-        scope: auth?.meta?.scope,
-        source: auth?.meta?.source,
-        recordKey: `mcp-gui/${server.id}`,
-      },
+      auth: authView,
+      ...(ownAuth === undefined ? {} : { ownAuth }),
       tls: {
         mode: server.tls.mode,
         hasCa: typeof server.tls.caPem === 'string' && server.tls.caPem !== '',
@@ -225,9 +310,52 @@ export class McpGuiController {
     }
   }
 
+  /** Public group view without secret values. */
+  groupView(group) {
+    const auth = this.groupAuths.get(group.id)
+    const headers = group.headers.map((header) => {
+      const value = headerValue(auth?.headers, header.name)
+      return {
+        name: header.name,
+        secret: header.secret === true,
+        set: typeof value === 'string' && value !== '',
+        ...(header.secret === true ? {} : { value: value ?? '' }),
+      }
+    })
+    const members = this.document.servers
+      .filter((server) => server.groupId === group.id)
+      .map((server) => {
+        const runtime = this.runtimes.get(server.id)
+        const live = runtime?.statusView()
+        return {
+          id: server.id,
+          name: server.name,
+          enabled: server.enabled !== false,
+          state: live?.state ?? (server.enabled === false ? 'disabled' : 'idle'),
+          toolCount: live?.toolCount ?? 0,
+        }
+      })
+    return {
+      id: group.id,
+      name: group.name,
+      headers,
+      auth: this.authViewFor(this.groupAuthServer(group), auth, `mcp-gui/group/${group.id}`),
+      tls: {
+        mode: group.tls.mode,
+        hasCa: typeof group.tls.caPem === 'string' && group.tls.caPem !== '',
+        caPem: group.tls.caPem,
+      },
+      serviceCount: members.length,
+      members,
+      createdAt: group.createdAt,
+      updatedAt: group.updatedAt,
+    }
+  }
+
   /** Complete state for the panel. */
   state() {
     return {
+      groups: this.document.groups.map((group) => this.groupView(group)),
       servers: this.document.servers.map((server) => this.serverView(server)),
       loginSessions: this.loginManager.list(),
     }
@@ -278,6 +406,10 @@ export class McpGuiController {
       const previous = typeof serverInput.id === 'string' ? this.findServer(serverInput.id) : undefined
       const { server, errors } = normalizeServer(serverInput, this.document.servers, previous)
       if (errors.length > 0) throw new ApiError(400, 'invalid-server', errors.join('；'), { errors })
+      if (server.groupId !== '') {
+        if (this.findGroup(server.groupId) === undefined) throw new ApiError(400, 'group-not-found', '所属组不存在')
+        if (server.transport === 'stdio') throw new ApiError(400, 'group-stdio', 'stdio 服务不能加入组，请使用单独认证')
+      }
       const auth = previous === undefined
         ? new AuthState({ ctx: this.ctx, server, redact: (text) => this.redact(text) })
         : await this.ensureAuth(previous)
@@ -287,6 +419,7 @@ export class McpGuiController {
         && previous.auth?.mode === 'login'
         && server.auth.mode === 'login'
         && previous.auth.loginUrl !== server.auth.loginUrl
+      const groupChanged = previous !== undefined && (previous.groupId ?? '') !== (server.groupId ?? '')
       if (loginChanged) {
         this.loginManager.cancelForServer(server.id)
         await auth.resetCapture()
@@ -296,11 +429,18 @@ export class McpGuiController {
         server.auth.expiresAt = null
       }
       await this.applySecretForm(server, input, auth)
-      if (server.auth.mode === 'login' && server.auth.tokenHeader !== '') {
+      if (groupChanged) {
+        await auth.resetCapture()
+        if (auth.lastError !== '') throw new ApiError(500, 'secret-store', auth.lastError)
+        server.auth.status = 'none'
+        server.auth.capturedAt = null
+        server.auth.expiresAt = null
+      }
+      if (server.auth.mode === 'login' && server.auth.tokenHeader !== '' && !groupChanged) {
         await auth.applyConfiguredToken()
         if (auth.lastError !== '') throw new ApiError(500, 'secret-store', auth.lastError)
       }
-      if (server.auth.mode === 'static') {
+      if (server.groupId === '' && !groupChanged && server.auth.mode === 'static') {
         const configured = new Set(server.headers.map((header) => header.name.toLowerCase()))
         const present = Object.keys(auth.headers).filter((name) => configured.has(name.toLowerCase()) && auth.headers[name] !== '')
         if (present.length === 0) throw new ApiError(400, 'missing-token', '静态认证至少需要一个已填写的请求头值')
@@ -341,6 +481,87 @@ export class McpGuiController {
     })
   }
 
+  /** Create or update one MCP group. */
+  async saveGroup(input) {
+    return this.serialize(async () => {
+      const groupInput = isPlainObject(input.group) ? input.group : input
+      const previous = typeof groupInput.id === 'string' ? this.findGroup(groupInput.id) : undefined
+      const { group, errors } = normalizeGroup(groupInput, this.document.groups, previous)
+      if (errors.length > 0) throw new ApiError(400, 'invalid-group', errors.join('；'), { errors })
+      const auth = previous === undefined
+        ? new AuthState({
+            ctx: this.ctx,
+            server: this.groupAuthServer(group),
+            redact: (text) => this.redact(text),
+            key: groupCredentialKeyFor(group.id),
+          })
+        : await this.ensureGroupAuth(previous)
+      auth.server = this.groupAuthServer(group)
+      await auth.load()
+      const loginChanged = previous !== undefined
+        && previous.auth?.mode === 'login'
+        && group.auth.mode === 'login'
+        && previous.auth.loginUrl !== group.auth.loginUrl
+      if (loginChanged) {
+        this.loginManager.cancelForServer(group.id)
+        await auth.resetCapture()
+        if (auth.lastError !== '') throw new ApiError(500, 'secret-store', auth.lastError)
+        group.auth.status = 'none'
+        group.auth.capturedAt = null
+        group.auth.expiresAt = null
+      }
+      await this.applySecretForm(this.groupAuthServer(group), input, auth)
+      if (group.auth.mode === 'login' && group.auth.tokenHeader !== '') {
+        await auth.applyConfiguredToken()
+        if (auth.lastError !== '') throw new ApiError(500, 'secret-store', auth.lastError)
+      }
+      if (group.auth.mode === 'static') {
+        const configured = new Set(group.headers.map((header) => header.name.toLowerCase()))
+        const present = Object.keys(auth.headers).filter((name) => configured.has(name.toLowerCase()) && auth.headers[name] !== '')
+        if (present.length === 0) throw new ApiError(400, 'missing-token', '组静态认证至少需要一个已填写的请求头值')
+      }
+      if (auth.lastError !== '') throw new ApiError(500, 'secret-store', auth.lastError)
+      if (group.auth.mode === 'login' && group.auth.capturedAt === null) group.auth.status = 'none'
+      const index = this.document.groups.findIndex((entry) => entry.id === group.id)
+      if (index === -1) this.document.groups.push(group)
+      else this.document.groups[index] = group
+      await saveDocument(this.document, this.dataDir)
+      this.groupAuths.set(group.id, auth)
+      await this.refreshGroupMembers(group, loginChanged)
+      this.logger.info(this.redact(`mcp-gui: 已保存 MCP 组 "${group.name}"`))
+      return this.groupView(group)
+    })
+  }
+
+  /** Delete one MCP group. Members must be moved out first. */
+  async deleteGroup(id) {
+    return this.serialize(async () => {
+      const group = this.findGroup(id)
+      if (group === undefined) throw new ApiError(404, 'not-found', '组不存在')
+      const members = this.document.servers.filter((server) => server.groupId === id)
+      if (members.length > 0) {
+        throw new ApiError(400, 'group-in-use', `组内还有 ${members.length} 个服务，请先将它们移出该组`)
+      }
+      this.loginManager.cancelForServer(id)
+      const auth = await this.ensureGroupAuth(group)
+      await auth.clear()
+      this.groupAuths.delete(id)
+      this.document.groups = this.document.groups.filter((entry) => entry.id !== id)
+      await saveDocument(this.document, this.dataDir)
+      this.logger.info(this.redact(`mcp-gui: 已删除 MCP 组 "${group.name}"`))
+      return { id }
+    })
+  }
+
+  /** Begin a browser login capture for one group. */
+  async startGroupLogin(id) {
+    const group = this.findGroup(id)
+    if (group === undefined) throw new ApiError(404, 'not-found', '组不存在')
+    if (group.auth.mode !== 'login') throw new ApiError(400, 'not-login', '该组没有配置登录捕获')
+    if (group.auth.loginUrl === '') throw new ApiError(400, 'missing-login-url', '请先填写组登录页地址')
+    return this.loginManager.start({ server: this.groupAuthServer(group), loginUrl: group.auth.loginUrl })
+  }
+
   /** Enable or disable one server without deleting it. */
   async setEnabled(id, enabled) {
     return this.serialize(async () => {
@@ -372,18 +593,36 @@ export class McpGuiController {
       if (previous === undefined) throw new ApiError(404, 'not-found', '服务不存在')
       server = previous
     }
+    const group = server.groupId ? this.findGroup(server.groupId) : undefined
+    if (server.groupId && group === undefined) throw new ApiError(400, 'group-not-found', '所属组不存在')
+    if (group !== undefined && server.transport === 'stdio') {
+      throw new ApiError(400, 'group-stdio', 'stdio 服务不能加入组，请使用单独认证')
+    }
 
     const secrets = new Set()
     const existingAuth = previous === undefined ? undefined : await this.ensureAuth(previous)
     if (existingAuth !== undefined) {
       for (const value of existingAuth.secrets()) secrets.add(value)
     }
+    const groupAuth = group === undefined ? undefined : await this.ensureGroupAuth(group)
+    if (groupAuth !== undefined) {
+      for (const value of groupAuth.secrets()) secrets.add(value)
+    }
     let headers = {}
     let env = {}
     let getHeaders
     let ensureFresh
     let onUnauthorized
-    if (draft === undefined) {
+    if (groupAuth !== undefined) {
+      await groupAuth.ensureFresh()
+      const values = draft !== undefined
+        ? this.collectHeaderValues(input, secrets)
+        : this.serviceHeaderValues(server, existingAuth)
+      headers = { ...groupAuth.requestHeaders(), ...values }
+      getHeaders = () => ({ ...groupAuth.requestHeaders(), ...values })
+      ensureFresh = () => groupAuth.ensureFresh()
+      onUnauthorized = () => groupAuth.refresh()
+    } else if (draft === undefined) {
       if (existingAuth !== undefined) {
         await existingAuth.ensureFresh()
         headers = existingAuth.requestHeaders()
@@ -466,6 +705,7 @@ export class McpGuiController {
   async startLogin(id) {
     const server = this.findServer(id)
     if (server === undefined) throw new ApiError(404, 'not-found', '服务不存在')
+    if (server.groupId !== '') throw new ApiError(400, 'group-auth', '组内服务请在组上统一登录')
     if (server.auth.mode !== 'login') throw new ApiError(400, 'not-login', '该服务没有配置登录捕获')
     if (server.auth.loginUrl === '') throw new ApiError(400, 'missing-login-url', '请先填写登录页地址')
     const result = await this.loginManager.start({ server, loginUrl: server.auth.loginUrl })
@@ -475,10 +715,11 @@ export class McpGuiController {
   /** Read one login capture session plus the current server auth summary. */
   loginStatus(id) {
     const status = this.loginManager.status(id)
-    const server = this.findServer(status.serverId)
+    const group = this.findGroup(status.serverId)
+    const server = group === undefined ? this.findServer(status.serverId) : undefined
     return {
       ...status,
-      auth: server === undefined ? undefined : this.serverView(server).auth,
+      auth: group !== undefined ? this.groupView(group).auth : (server === undefined ? undefined : this.serverView(server).auth),
     }
   }
 
@@ -496,6 +737,24 @@ export class McpGuiController {
 
   /** Persist captured credentials and make them live. */
   async onCapture(serverId, capture) {
+    const group = this.findGroup(serverId)
+    if (group !== undefined) {
+      if (typeof capture.loginUrl === 'string' && capture.loginUrl !== group.auth.loginUrl) {
+        throw new Error('登录页地址已变更，已丢弃旧会话的捕获')
+      }
+      const groupAuth = await this.ensureGroupAuth(group)
+      await groupAuth.applyCapture(capture)
+      if (groupAuth.lastError !== '') throw new Error(groupAuth.lastError)
+      group.auth.status = 'captured'
+      group.auth.capturedAt = capture.source === 'manual' ? Date.now() : (capture.capturedAt ?? Date.now())
+      group.auth.expiresAt = groupAuth.meta?.expiresAt ?? group.auth.expiresAt
+      group.auth.lastError = ''
+      group.updatedAt = Date.now()
+      await saveDocument(this.document, this.dataDir)
+      await this.refreshGroupMembers(group)
+      this.logger.info(this.redact(`mcp-gui 组(${group.name}): 已保存登录捕获的认证信息`))
+      return this.groupView(group)
+    }
     const server = this.findServer(serverId)
     if (server === undefined) throw new Error('服务已被删除')
     if (typeof capture.loginUrl === 'string' && capture.loginUrl !== server.auth.loginUrl) {
@@ -533,6 +792,24 @@ export class McpGuiController {
     try {
       if (req.method === 'GET' && path === '/api/state') {
         sendJson(res, 200, { ok: true, ...this.state() })
+        return
+      }
+      if (req.method === 'POST' && path === '/api/groups') {
+        const body = await readJsonBody(req)
+        const group = await this.saveGroup(body)
+        sendJson(res, 200, { ok: true, group })
+        return
+      }
+      if (req.method === 'POST' && path === '/api/groups/delete') {
+        const body = await readJsonBody(req)
+        const result = await this.deleteGroup(asString(body.id))
+        sendJson(res, 200, { ok: true, ...result })
+        return
+      }
+      if (req.method === 'POST' && path === '/api/groups/login/start') {
+        const body = await readJsonBody(req)
+        const result = await this.startGroupLogin(asString(body.id))
+        sendJson(res, 200, { ok: true, ...result })
         return
       }
       if (req.method === 'POST' && path === '/api/servers') {

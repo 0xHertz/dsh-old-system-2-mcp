@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "External system connections",
-    "description": "Manage external system connections (MCP) from a sidebar panel: add, edit, enable, disable, delete, and test. Supports stdio, SSE, and streamable HTTP; custom request headers; browser login capture that saves the authentication headers automatically; custom CA certificates or a verification opt-out for self-signed HTTPS; and automatic credential refresh with one retry after a 401. Captured secrets stay in the credential store and are never shown or logged in clear text. Login capture works best on same-origin login pages; cross-origin SSO, service workers, and WebSockets may limit capture, and a session without a refresh token must sign in again after expiry."
+    "description": "Manage external system connections (MCP) from a sidebar panel: add, edit, enable, disable, delete, test, and share one authentication across a group. Supports stdio, SSE, and streamable HTTP; custom request headers; browser login capture that saves the authentication headers automatically; custom CA certificates or a verification opt-out for self-signed HTTPS; and automatic credential refresh with one retry after a 401. Captured secrets stay in the credential store and are never shown or logged in clear text. Login capture works best on same-origin login pages; cross-origin SSO, service workers, and WebSockets may limit capture, and a session without a refresh token must sign in again after expiry."
   }
 }

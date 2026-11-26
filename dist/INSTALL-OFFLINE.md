@@ -1,11 +1,11 @@
-# 外部系统连接插件 1.0.12 — 离线安装
+# 外部系统连接插件 1.1.5 — 离线安装
 
 ## 包内容
 
 | 文件 | 用途 |
 |---|---|
-| `dsh-mcp-gui-1.0.12.tgz` | **推荐**。npm 包格式，插件管理器可直接从本地 tarball 安装 |
-| `dsh-mcp-gui-1.0.12.zip` | 同样的包文件，解压后以目录方式安装（适合只接受目录的界面） |
+| `dsh-mcp-gui-1.1.5.tgz` | **推荐**。npm 包格式，插件管理器可直接从本地 tarball 安装 |
+| `dsh-mcp-gui-1.1.5.zip` | 同样的包文件，解压后以目录方式安装（适合只接受目录的界面） |
 | `INSTALL-OFFLINE.md` | 本说明 |
 | `SHA256SUMS` | 校验和 |
 
@@ -18,19 +18,19 @@
 
 ## 方式 A：Web 界面安装（推荐）
 
-1. 把 `dsh-mcp-gui-1.0.12.tgz` 拷到目标机器。
+1. 把 `dsh-mcp-gui-1.1.5.tgz` 拷到目标机器。
 2. 打开 DSH Web → 左下角 **设置** → **插件**。
 3. 选择 **添加插件 / Add plugin**，填入 tarball 的**绝对路径**：
    ```
-   /absolute/path/to/dsh-mcp-gui-1.0.12.tgz
+   /absolute/path/to/dsh-mcp-gui-1.1.5.tgz
    ```
 4. 安装完成后确认 **外部系统连接** 已启用；刷新页面，侧边栏出现 **外部系统连接**。
-5. 如果当前界面的添加插件只接受目录：解压 zip（或 `tar -xzf dsh-mcp-gui-1.0.12.tgz` 得到 `package/`），在添加插件里选择包含 `package.json` 的目录。
+5. 如果当前界面的添加插件只接受目录：解压 zip（或 `tar -xzf dsh-mcp-gui-1.1.5.tgz` 得到 `package/`），在添加插件里选择包含 `package.json` 的目录。
 
 ## 方式 B：命令行安装
 
 ```bash
-dsh plugin --profile <profile> add /absolute/path/to/dsh-mcp-gui-1.0.12.tgz
+dsh plugin --profile <profile> add /absolute/path/to/dsh-mcp-gui-1.1.5.tgz
 ```
 
 `dsh plugin add` 只把包加入 profile 依赖；如果启动后没有自动出现在侧边栏，请在 **设置 → 插件** 中启用 **外部系统连接**，或把 `@local/dsh-mcp-gui` 加入目标 profile 的 `package.json`：
@@ -54,7 +54,7 @@ dsh plugin --profile <profile> add /absolute/path/to/dsh-mcp-gui-1.0.12.tgz
 如果目标机器上的 Agent 有 `plugin_manager` 工具，也可以直接执行：
 
 ```
-plugin_manager install_bundle target=/absolute/path/to/dsh-mcp-gui-1.0.12.tgz
+plugin_manager install_bundle target=/absolute/path/to/dsh-mcp-gui-1.1.5.tgz
 ```
 
 ## 离线验证
@@ -83,6 +83,6 @@ shasum -a 256 -c SHA256SUMS
 
 ## 版本与限制
 
-- 版本：1.0.12；平台：`web`。
+- 版本：1.1.5；平台：`web`。
 - 登录捕获、自签证书、401 刷新重试等行为与包内的 `README.md` 一致。
 - 若目标 DSH 升级后不再提供 `@modelcontextprotocol/client`，插件会在连接时报告 SDK 加载失败；此时需要匹配版本的插件包或更新插件。

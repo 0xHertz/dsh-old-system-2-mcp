@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 /** Version of the on-disk document. */
-const STORE_VERSION = 1
+const STORE_VERSION = 2
 
 /**
  * Directory holding this plugin's mutable data.
@@ -31,7 +31,7 @@ export function storeFile(directory = dataDirectory()) {
 
 /** An empty document. */
 export function emptyDocument() {
-  return { version: STORE_VERSION, servers: [] }
+  return { version: STORE_VERSION, groups: [], servers: [] }
 }
 
 /**
@@ -56,7 +56,14 @@ export async function loadDocument(directory = dataDirectory()) {
   if (typeof parsed !== 'object' || parsed === null || !Array.isArray(parsed.servers)) {
     throw new Error(`MCP 服务配置结构不合法：${storeFile(directory)}`)
   }
-  return { version: STORE_VERSION, servers: parsed.servers.filter((server) => typeof server === 'object' && server !== null) }
+  const groups = Array.isArray(parsed.groups)
+    ? parsed.groups.filter((group) => typeof group === 'object' && group !== null)
+    : []
+  return {
+    version: STORE_VERSION,
+    groups,
+    servers: parsed.servers.filter((server) => typeof server === 'object' && server !== null),
+  }
 }
 
 /**
@@ -68,7 +75,7 @@ export async function saveDocument(document, directory = dataDirectory()) {
   await mkdir(dir, { recursive: true, mode: 0o700 })
   const target = storeFile(directory)
   const temporary = `${target}.${process.pid}.${Date.now()}.tmp`
-  const body = `${JSON.stringify({ version: STORE_VERSION, servers: document.servers }, null, 2)}\n`
+  const body = `${JSON.stringify({ version: STORE_VERSION, groups: document.groups ?? [], servers: document.servers }, null, 2)}\n`
   await writeFile(temporary, body, { encoding: 'utf8', mode: 0o600 })
   await chmod(temporary, 0o600)
   await rename(temporary, target)

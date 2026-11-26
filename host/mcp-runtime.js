@@ -9,7 +9,7 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { AuthState } from './credentials.js'
 import { createAuthFetch } from './http-fetch.js'
-import { publicToolName, redactSecrets, summarize } from './util.js'
+import { mergeHeaders, publicToolName, redactSecrets, summarize } from './util.js'
 
 /** SDK modules resolved lazily from the plugin or the DSH installation. */
 let sdkCache
@@ -147,11 +147,12 @@ export function classifyError(error, stageHint = 'connect', redact = (text) => t
 }
 
 /** Build an SDK transport for one normalized server row. */
-function buildTransport({ server, auth, logger, redact, signal }) {
+function buildTransport({ server, auth, extraHeaders, logger, redact, signal }) {
   const sdk = loadSdk()
-  const headers = auth.requestHeaders()
+  const headers = () => mergeHeaders(auth.requestHeaders(), extraHeaders?.() ?? {})
+  const initialHeaders = headers()
   const authFetch = createAuthFetch({
-    getHeaders: () => auth.requestHeaders(),
+    getHeaders: headers,
     ensureFresh: () => auth.ensureFresh(),
     onUnauthorized: () => auth.onUnauthorized(),
     tls: server.tls,
@@ -175,12 +176,12 @@ function buildTransport({ server, auth, logger, redact, signal }) {
   if (server.transport === 'sse') {
     return new sdk.SSEClientTransport(new URL(server.url), {
       fetch: authFetch,
-      requestInit: { headers },
+      requestInit: { headers: initialHeaders },
     })
   }
   return new sdk.StreamableHTTPClientTransport(new URL(server.url), {
     fetch: authFetch,
-    requestInit: { headers },
+    requestInit: { headers: initialHeaders },
   })
 }
 
@@ -191,11 +192,13 @@ export class McpRuntime {
    * @param {import('@deepseek-ai/cordis').Context} options.ctx
    * @param {object} options.server normalized server row.
    * @param {import('./credentials.js').AuthState} options.auth
+   * @param {(() => Record<string,string>)|undefined} [options.extraHeaders]
    */
-  constructor({ ctx, server, auth }) {
+  constructor({ ctx, server, auth, extraHeaders }) {
     this.ctx = ctx
     this.server = server
     this.auth = auth
+    this.extraHeaders = extraHeaders
     this.disposed = false
     this.client = undefined
     this.transport = undefined
@@ -270,6 +273,7 @@ export class McpRuntime {
       transport = buildTransport({
         server: this.server,
         auth: this.auth,
+        extraHeaders: this.extraHeaders,
         logger: this.logger,
         redact: (text) => this.redact(text),
         signal: this.controller.signal,

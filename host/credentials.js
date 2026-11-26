@@ -14,6 +14,11 @@ export function credentialKeyFor(serverId) {
   return `${CREDENTIAL_SCOPE}/${serverId}`
 }
 
+/** Build the record key for one shared MCP group. */
+export function groupCredentialKeyFor(groupId) {
+  return `${CREDENTIAL_SCOPE}/group/${groupId}`
+}
+
 /** Drop values JSON cannot represent (undefined, functions, symbols, non-finite numbers). */
 function jsonSafe(value) {
   if (value === undefined || typeof value === 'function' || typeof value === 'symbol') return undefined
@@ -81,10 +86,10 @@ export class AuthState {
    * @param {object} options.server normalized server row.
    * @param {(text: string) => string} [options.redact]
    */
-  constructor({ ctx, server, redact = (text) => text }) {
+  constructor({ ctx, server, redact = (text) => text, key = undefined }) {
     this.ctx = ctx
     this.server = server
-    this.key = credentialKeyFor(server.id)
+    this.key = key ?? credentialKeyFor(server.id)
     this.redact = redact
     this.headers = {}
     this.env = {}

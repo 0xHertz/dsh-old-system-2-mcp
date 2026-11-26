@@ -813,6 +813,191 @@ try {
   check('late capture from the old login page is rejected', lateCaptureRejected && (lateRecord === undefined || lateRecord.payload.headers?.Authorization === undefined), JSON.stringify(lateRecord))
   await controller.deleteServer(urlChange.id)
 
+  // 4d. One group login shared by several MCP services.
+  const group = await controller.saveGroup({
+    group: {
+      name: 'Spring Cloud Test',
+      headers: [],
+      auth: { mode: 'login', loginUrl: `${servers.httpOrigin}/login`, refreshUrl: `${servers.httpOrigin}/refresh` },
+      tls: { mode: 'default' },
+    },
+  })
+  const groupedOne = await controller.saveServer({
+    server: {
+      name: 'group-one',
+      enabled: true,
+      transport: 'streamable-http',
+      url: `${servers.httpOrigin}/mcp`,
+      groupId: group.id,
+      headers: [],
+      auth: { mode: 'none' },
+      tls: { mode: 'default' },
+    },
+  })
+  const groupedTwo = await controller.saveServer({
+    server: {
+      name: 'group-two',
+      enabled: true,
+      transport: 'streamable-http',
+      url: `${servers.httpOrigin}/mcp`,
+      groupId: group.id,
+      headers: [],
+      auth: { mode: 'none' },
+      tls: { mode: 'default' },
+    },
+  })
+  check('grouped services use group auth', groupedOne.ownAuth?.mode === 'none' && groupedOne.auth?.mode === 'login', JSON.stringify(groupedOne.auth))
+  check('group view lists both members', controller.state().groups.find((entry) => entry.id === group.id)?.serviceCount === 2)
+
+  const groupStart = await controller.startGroupLogin(group.id)
+  await fetch(groupStart.url).then((response) => response.text())
+  await fetch(groupStart.url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'username=alice&password=secret',
+  }).then((response) => response.text())
+  await fetch(`http://127.0.0.1:${new URL(groupStart.url).port}/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  })
+  const groupCaptured = await waitFor(async () => {
+    const status = controller.loginStatus(groupStart.id)
+    return status.status === 'captured' ? status : undefined
+  })
+  check('group login captures one shared credential', groupCaptured !== undefined, JSON.stringify(groupCaptured))
+  check('group credential key is group-scoped', [...records.keys()].some((key) => key === `mcp-gui/group/${group.id}`))
+  check('group auth summary is masked', controller.state().groups.find((entry) => entry.id === group.id)?.auth?.masked === 'Bearer ****')
+  const groupOneState = await waitState(controller, groupedOne.id)
+  const groupTwoState = await waitState(controller, groupedTwo.id)
+  check('both grouped services connect with the shared credential', groupOneState?.status?.state === 'connected' && groupTwoState?.status?.state === 'connected', JSON.stringify([groupOneState?.status, groupTwoState?.status]))
+  check('both grouped services register tools', tools.get('mcp__group-one__whoami') !== undefined && tools.get('mcp__group-two__whoami') !== undefined)
+  const groupOneResult = await tools.get('mcp__group-one__whoami').execute({}, { signal: AbortSignal.timeout(5_000) })
+  const groupTwoResult = await tools.get('mcp__group-two__whoami').execute({}, { signal: AbortSignal.timeout(5_000) })
+  check('both grouped tools execute with shared auth', groupOneResult === 'authenticated' && groupTwoResult === 'authenticated', `${groupOneResult}/${groupTwoResult}`)
+
+  const ownAuthServer = await controller.saveServer({
+    server: {
+      name: 'own-auth-group',
+      enabled: false,
+      transport: 'streamable-http',
+      url: `${servers.httpOrigin}/mcp`,
+      headers: [{ name: 'Authorization', secret: true }],
+      auth: { mode: 'static' },
+      tls: { mode: 'default' },
+    },
+    headerValues: { Authorization: 'Bearer test-token' },
+  })
+  const ownAuthProbe = await controller.probe({ id: ownAuthServer.id })
+  check('standalone auth works before joining a group', ownAuthProbe.ok === true, ownAuthProbe.message)
+  const joinedOwnAuth = await controller.saveServer({
+    server: {
+      id: ownAuthServer.id,
+      name: ownAuthServer.name,
+      enabled: false,
+      transport: ownAuthServer.transport,
+      url: ownAuthServer.url,
+      groupId: group.id,
+      headers: [{ name: 'Authorization', secret: true }],
+      auth: { mode: 'static' },
+      tls: { mode: 'default' },
+    },
+    headerValues: { Authorization: 'Bearer test-token' },
+  })
+  const joinedOwnRecord = records.get(`mcp-gui/${ownAuthServer.id}`)
+  check('joining a group clears the standalone capture', joinedOwnAuth.ownAuth?.status === 'none' && (joinedOwnRecord === undefined || joinedOwnRecord.payload.headers?.Authorization === undefined), JSON.stringify(joinedOwnAuth.ownAuth))
+  const leftOwnAuth = await controller.saveServer({
+    server: {
+      id: ownAuthServer.id,
+      name: ownAuthServer.name,
+      enabled: false,
+      transport: ownAuthServer.transport,
+      url: ownAuthServer.url,
+      groupId: '',
+      headers: [{ name: 'Authorization', secret: true }],
+      auth: { mode: 'static' },
+      tls: { mode: 'default' },
+    },
+    headerValues: {},
+  })
+  check('leaving a group does not restore standalone auth', leftOwnAuth.auth.status === 'none', JSON.stringify(leftOwnAuth.auth))
+  const leftProbe = await controller.probe({ id: ownAuthServer.id })
+  check('service requires new standalone auth after leaving a group', leftProbe.ok === false && leftProbe.stage === 'auth', JSON.stringify(leftProbe))
+  await controller.deleteServer(ownAuthServer.id)
+
+  const groupProbe = await controller.probe({ id: groupedOne.id })
+  check('grouped service probes with shared auth', groupProbe.ok === true, groupProbe.message)
+  await fetch(`${servers.httpOrigin}/expire`)
+  const refreshedOne = await tools.get('mcp__group-one__whoami').execute({}, { signal: AbortSignal.timeout(5_000) })
+  const refreshedTwo = await tools.get('mcp__group-two__whoami').execute({}, { signal: AbortSignal.timeout(5_000) })
+  check('shared group auth refreshes once across services', refreshedOne === 'authenticated' && refreshedTwo === 'authenticated', `${refreshedOne}/${refreshedTwo}`)
+
+  const ungrouped = await controller.saveServer({
+    server: {
+      id: groupedOne.id,
+      name: groupedOne.name,
+      enabled: true,
+      transport: groupedOne.transport,
+      url: groupedOne.url,
+      groupId: '',
+      headers: [],
+      auth: { mode: 'none' },
+      tls: { mode: 'default' },
+    },
+  })
+  check('moving a service out of a group leaves no standalone capture', ungrouped.groupId === '' && ungrouped.auth.mode === 'none' && ungrouped.auth.status === 'none', JSON.stringify(ungrouped.auth))
+  const ungroupedState = await waitState(controller, groupedOne.id)
+  check('ungrouped service no longer uses group auth', ungroupedState?.status?.state === 'auth-required', JSON.stringify(ungroupedState?.status))
+  await controller.deleteServer(ungrouped.id)
+
+  const staticGroup = await controller.saveGroup({
+    group: {
+      name: 'Static Group Test',
+      headers: [{ name: 'Authorization', secret: true }],
+      auth: { mode: 'static' },
+      tls: { mode: 'default' },
+    },
+    headerValues: { Authorization: 'Bearer test-token' },
+  })
+  const staticMember = await controller.saveServer({
+    server: {
+      name: 'group-static',
+      enabled: true,
+      transport: 'streamable-http',
+      url: `${servers.httpOrigin}/mcp`,
+      groupId: staticGroup.id,
+      headers: [],
+      auth: { mode: 'none' },
+      tls: { mode: 'default' },
+    },
+  })
+  const staticState = await waitState(controller, staticMember.id)
+  check('a static group authenticates its members', staticState?.status?.state === 'connected' && controller.state().groups.find((entry) => entry.id === staticGroup.id)?.auth?.masked === 'Bearer ****', JSON.stringify(staticState?.status))
+  await controller.deleteServer(staticMember.id)
+  await controller.deleteGroup(staticGroup.id)
+
+  const groupChanged = await controller.saveGroup({
+    group: {
+      id: group.id,
+      name: group.name,
+      headers: [],
+      auth: { mode: 'login', loginUrl: `${servers.httpOrigin}/spa-login`, refreshUrl: `${servers.httpOrigin}/refresh` },
+      tls: { mode: 'default' },
+    },
+  })
+  check('changing group login URL resets shared credentials', groupChanged.auth.status === 'none', JSON.stringify(groupChanged.auth))
+  const changedGroupRecord = records.get(`mcp-gui/group/${group.id}`)
+  check('changing group login URL drops group Authorization/Cookie', changedGroupRecord === undefined || (changedGroupRecord.payload.headers?.Authorization === undefined && changedGroupRecord.payload.headers?.Cookie === undefined), JSON.stringify(changedGroupRecord))
+
+  let groupDeleteBlocked = ''
+  try { await controller.deleteGroup(group.id) } catch (error) { groupDeleteBlocked = error instanceof Error ? error.message : String(error) }
+  check('group with members cannot be deleted', groupDeleteBlocked.includes('移出'), groupDeleteBlocked)
+
+  await controller.deleteServer(groupedTwo.id)
+  await controller.deleteGroup(group.id)
+  check('group deletion removes the group credential', ![...records.keys()].some((key) => key === `mcp-gui/group/${group.id}`))
+  check('group deletion removes the group row', controller.state().groups.every((entry) => entry.id !== group.id))
+
   // 5. Disable unregisters the tools.
   await controller.setEnabled(demo.id, false)
   check('disable unregisters tools', tools.get('mcp__demo__echo') === undefined)

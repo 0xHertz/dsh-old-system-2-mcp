@@ -19,6 +19,11 @@ export function newServerId() {
   return `srv-${randomBytes(6).toString('hex')}`
 }
 
+/** A stable group id that is also a valid credential-key segment. */
+export function newGroupId() {
+  return `grp-${randomBytes(6).toString('hex')}`
+}
+
 /** An unguessable login-capture session id. */
 export function newLoginId() {
   return randomBytes(18).toString('hex')
@@ -302,10 +307,13 @@ export function normalizeServer(input, existingServers, previous) {
     && previous.auth?.mode === 'login'
     && authMode === 'login'
     && previous.auth.loginUrl !== loginUrl
+  const groupId = input.groupId === undefined ? (previous?.groupId ?? '') : asString(input.groupId)
+  if (groupId !== '' && !/^grp-[a-z0-9]{8,32}$/.test(groupId)) errors.push('所属组 id 不合法')
   const createdAt = previous?.createdAt ?? Date.now()
   const server = {
     id,
     name,
+    groupId,
     enabled: asBoolean(input.enabled, previous?.enabled ?? true),
     transport,
     url: transport === 'stdio' ? '' : url,
@@ -331,6 +339,103 @@ export function normalizeServer(input, existingServers, previous) {
     updatedAt: Date.now(),
   }
   return { server, errors }
+}
+
+/**
+ * Normalize one MCP group. A group owns shared authentication and common
+ * header names; it has no transport of its own.
+ * @param {unknown} input raw request body.
+ * @param {object[]} existingGroups groups already stored.
+ * @param {object|undefined} previous the group being edited.
+ * @returns {{group?: object, errors: string[]}}
+ */
+export function normalizeGroup(input, existingGroups, previous) {
+  const errors = []
+  if (!isPlainObject(input)) return { errors: ['请求内容不合法'] }
+  const id = previous?.id ?? (asString(input.id) || newGroupId())
+  if (!/^grp-[a-z0-9]{8,32}$/.test(id)) errors.push('组 id 不合法')
+  const name = asString(input.name).trim()
+  if (name === '') errors.push('组名不能为空')
+  else if (name.length > 64) errors.push('组名不能超过 64 个字符')
+  else if (/[\r\n]/.test(name)) errors.push('组名不能包含换行')
+  else if (existingGroups.some((group) => group.id !== id && group.name === name)) errors.push(`组名 "${name}" 已存在`)
+
+  const headers = []
+  const seenHeaders = new Set()
+  if (Array.isArray(input.headers)) {
+    for (const entry of input.headers) {
+      if (!isPlainObject(entry)) continue
+      const headerName = asString(entry.name).trim()
+      if (headerName === '') continue
+      if (!HEADER_NAME_PATTERN.test(headerName)) {
+        errors.push(`请求头名 "${headerName}" 不合法`)
+        continue
+      }
+      const lower = headerName.toLowerCase()
+      if (seenHeaders.has(lower)) {
+        errors.push(`请求头 "${headerName}" 重复`)
+        continue
+      }
+      seenHeaders.add(lower)
+      headers.push({
+        name: headerName,
+        secret: asBoolean(entry.secret, isSensitiveHeader(headerName) || looksSecret(asString(entry.value))),
+      })
+    }
+  }
+
+  const authInput = isPlainObject(input.auth) ? input.auth : {}
+  const authMode = ['none', 'login', 'static'].includes(asString(authInput.mode)) ? asString(authInput.mode) : 'none'
+  const loginUrl = cleanUrl(authInput.loginUrl)
+  const refreshUrl = cleanUrl(authInput.refreshUrl)
+  const tokenHeader = asString(authInput.tokenHeader).trim()
+  const tokenPrefix = asString(authInput.tokenPrefix)
+  if (authMode === 'login') {
+    const loginError = validateHttpUrl(loginUrl, '登录页地址')
+    if (loginError !== undefined) errors.push(loginError)
+    if (refreshUrl !== '') {
+      const refreshError = validateHttpUrl(refreshUrl, '刷新地址')
+      if (refreshError !== undefined) errors.push(refreshError)
+    }
+    if (tokenHeader !== '' && !HEADER_NAME_PATTERN.test(tokenHeader)) errors.push('令牌请求头名不合法')
+    if (tokenHeader === '' && tokenPrefix !== '') errors.push('填写令牌前缀前需要先填写令牌请求头')
+    if (Buffer.byteLength(tokenPrefix) > 256) errors.push('令牌前缀超过 256 字节')
+    if (/[\r\n]/.test(tokenPrefix)) errors.push('令牌前缀不能包含换行')
+  } else if (authMode === 'static') {
+    if (headers.length === 0) errors.push('组静态认证至少需要一个请求头')
+  }
+
+  const tlsInput = isPlainObject(input.tls) ? input.tls : {}
+  const tlsMode = ['default', 'ca', 'insecure'].includes(asString(tlsInput.mode)) ? asString(tlsInput.mode) : 'default'
+  const caPem = asString(tlsInput.caPem).trim()
+  if (tlsMode === 'ca' && !caPem.includes('-----BEGIN CERTIFICATE-----')) errors.push('组认证 TLS 的自定义 CA 必须是 PEM 证书')
+  if (Buffer.byteLength(caPem) > 256 * 1024) errors.push('组认证 CA 证书超过 256 KB')
+
+  const loginChanged = previous !== undefined
+    && previous.auth?.mode === 'login'
+    && authMode === 'login'
+    && previous.auth.loginUrl !== loginUrl
+  const createdAt = previous?.createdAt ?? Date.now()
+  const group = {
+    id,
+    name,
+    headers,
+    auth: {
+      mode: authMode,
+      loginUrl: authMode === 'login' ? loginUrl : '',
+      refreshUrl: authMode === 'login' ? refreshUrl : '',
+      tokenHeader: authMode === 'login' ? tokenHeader : '',
+      tokenPrefix: authMode === 'login' ? tokenPrefix : '',
+      status: !loginChanged && previous?.auth?.status === 'captured' ? 'captured' : 'none',
+      capturedAt: loginChanged ? null : previous?.auth?.capturedAt ?? null,
+      expiresAt: loginChanged ? null : previous?.auth?.expiresAt ?? null,
+      lastError: '',
+    },
+    tls: { mode: tlsMode, caPem: tlsMode === 'ca' ? caPem : '' },
+    createdAt,
+    updatedAt: Date.now(),
+  }
+  return { group, errors }
 }
 
 /**

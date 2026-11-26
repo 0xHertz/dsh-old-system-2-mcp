@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "外部系统连接",
-    "description": "在侧边栏面板中管理外部系统连接（MCP）：新增、编辑、启用、停用、删除和测试。支持 stdio、SSE、streamable HTTP，支持自定义请求头，支持浏览器登录页捕获并自动保存认证请求头，支持自签证书的自定义 CA 或跳过校验，并按 expires_in 提前刷新、遇到 401 自动重试一次。捕获的凭据只保存在凭据存储中，界面和日志不会明文回显。登录捕获对同源登录页成功率最高；跨域 SSO、Service Worker、WebSocket 可能受限；没有 refresh_token 的会话过期后需要重新登录。"
+    "description": "在侧边栏面板中管理外部系统连接（MCP）：新增、编辑、启用、停用、删除和测试，并可用 MCP 组共享统一认证。支持 stdio、SSE、streamable HTTP，支持自定义请求头，支持浏览器登录页捕获并自动保存认证请求头，支持自签证书的自定义 CA 或跳过校验，并按 expires_in 提前刷新、遇到 401 自动重试一次。捕获的凭据只保存在凭据存储中，界面和日志不会明文回显。登录捕获对同源登录页成功率最高；跨域 SSO、Service Worker、WebSocket 可能受限；没有 refresh_token 的会话过期后需要重新登录。"
   }
 }

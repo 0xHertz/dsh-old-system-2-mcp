@@ -19,6 +19,24 @@ window.__ModuleLoader__.load({
         title: '外部系统连接',
         subtitle: '图形化管理外部系统连接（MCP）、认证信息与工具；保存后即可在会话中调用。',
         add: '新增连接',
+        addGroup: '新增组',
+        groups: 'MCP 组',
+        group: '所属组',
+        groupHint: '选择组后认证由组统一管理；加入或移出组会清除该服务原有的独立认证，移出后需要重新认证。',
+        standaloneAuth: '无（单独认证）',
+        standaloneServices: '单独服务',
+        groupAuth: '组认证',
+        groupAuthHint: '该服务使用组的统一认证，请在组卡片上登录。移出组后需要重新独立认证，不会恢复旧凭据。',
+        groupName: '组名',
+        groupNamePlaceholder: '例如 Spring Cloud',
+        groupNameHint: '组名只用于展示，可包含空格。',
+        inGroup: '组内',
+        groupEmpty: '组内还没有服务。编辑服务时，在“所属组”里选择这个组。',
+        groupServiceCount: '个服务',
+        groupLogin: '组登录',
+        groupLoginHint: '登录一次，组内所有服务共享认证信息。',
+        groupDelete: '删除组',
+        groupInUse: '组内还有服务，请先移出。',
         refresh: '刷新',
         retry: '重试',
         loading: '正在加载…',
@@ -180,6 +198,24 @@ window.__ModuleLoader__.load({
         title: 'External system connections',
         subtitle: 'Manage external system connections (MCP), credentials and tools graphically. Saved connections are callable from a session.',
         add: 'Add connection',
+        addGroup: 'Add group',
+        groups: 'MCP groups',
+        group: 'Group',
+        groupHint: 'The group owns shared authentication. Joining or leaving clears this service\'s standalone credentials; leaving requires a fresh sign-in.',
+        standaloneAuth: 'None (own auth)',
+        standaloneServices: 'Standalone services',
+        groupAuth: 'Group auth',
+        groupAuthHint: 'This service uses the group authentication. Sign in from the group card. Leaving the group requires fresh standalone authentication; old credentials are not restored.',
+        groupName: 'Group name',
+        groupNamePlaceholder: 'e.g. Spring Cloud',
+        groupNameHint: 'Display name only; spaces are allowed.',
+        inGroup: 'In group',
+        groupEmpty: 'No services in this group yet. Edit a service and select this group under “Group”.',
+        groupServiceCount: 'services',
+        groupLogin: 'Group sign-in',
+        groupLoginHint: 'Sign in once; every service in the group shares the credentials.',
+        groupDelete: 'Delete group',
+        groupInUse: 'The group still has services. Move them out first.',
         refresh: 'Refresh',
         retry: 'Retry',
         loading: 'Loading…',
@@ -480,6 +516,7 @@ window.__ModuleLoader__.load({
       return {
         id: undefined,
         name: '',
+        groupId: '',
         enabled: true,
         transport: 'streamable-http',
         protocolMode: 'auto',
@@ -500,6 +537,7 @@ window.__ModuleLoader__.load({
       return {
         id: server.id,
         name: server.name,
+        groupId: server.groupId ?? '',
         enabled: server.enabled,
         transport: server.transport,
         protocolMode: server.transport === 'sse' ? 'legacy' : (server.protocolMode ?? 'legacy'),
@@ -514,13 +552,16 @@ window.__ModuleLoader__.load({
           value: header.secret === true ? '' : header.value ?? '',
           set: header.set === true,
         })),
-        auth: {
-          mode: server.auth?.mode ?? 'none',
-          loginUrl: server.auth?.loginUrl ?? '',
-          refreshUrl: server.auth?.refreshUrl ?? '',
-          tokenHeader: server.auth?.tokenHeader ?? '',
-          tokenPrefix: server.auth?.tokenPrefix ?? '',
-        },
+        auth: (() => {
+          const own = server.ownAuth ?? server.auth
+          return {
+            mode: own?.mode ?? 'none',
+            loginUrl: own?.loginUrl ?? '',
+            refreshUrl: own?.refreshUrl ?? '',
+            tokenHeader: own?.tokenHeader ?? '',
+            tokenPrefix: own?.tokenPrefix ?? '',
+          }
+        })(),
         tls: {
           mode: server.tls?.mode ?? 'default',
           caPem: server.tls?.caPem ?? '',
@@ -544,6 +585,7 @@ window.__ModuleLoader__.load({
         server: {
           id: form.id,
           name: form.name.trim(),
+          groupId: form.groupId || '',
           enabled: form.enabled,
           transport: form.transport,
           protocolMode: form.protocolMode,
@@ -569,6 +611,70 @@ window.__ModuleLoader__.load({
         },
         headerValues,
         envValues,
+      }
+    }
+
+    function emptyGroupForm() {
+      return {
+        id: undefined,
+        name: '',
+        headers: [],
+        auth: { mode: 'login', loginUrl: '', refreshUrl: '', tokenHeader: '', tokenPrefix: '' },
+        tls: { mode: 'default', caPem: '' },
+        createdAt: undefined,
+        updatedAt: undefined,
+      }
+    }
+
+    function groupToForm(group) {
+      return {
+        id: group.id,
+        name: group.name,
+        headers: (group.headers ?? []).map((header) => ({
+          name: header.name,
+          secret: header.secret === true,
+          value: header.secret === true ? '' : header.value ?? '',
+          set: header.set === true,
+        })),
+        auth: {
+          mode: group.auth?.mode ?? 'none',
+          loginUrl: group.auth?.loginUrl ?? '',
+          refreshUrl: group.auth?.refreshUrl ?? '',
+          tokenHeader: group.auth?.tokenHeader ?? '',
+          tokenPrefix: group.auth?.tokenPrefix ?? '',
+        },
+        tls: {
+          mode: group.tls?.mode ?? 'default',
+          caPem: group.tls?.caPem ?? '',
+        },
+        createdAt: group.createdAt,
+        updatedAt: group.updatedAt,
+      }
+    }
+
+    function groupToPayload(form) {
+      const headerValues = {}
+      for (const header of form.headers) {
+        const name = header.name.trim()
+        if (name !== '' && typeof header.value === 'string' && header.value !== '') headerValues[name] = header.value
+      }
+      return {
+        group: {
+          id: form.id,
+          name: form.name.trim(),
+          headers: form.headers
+            .map((header) => ({ name: header.name.trim(), secret: header.secret }))
+            .filter((header) => header.name !== ''),
+          auth: {
+            mode: form.auth.mode,
+            loginUrl: form.auth.loginUrl.trim(),
+            refreshUrl: form.auth.refreshUrl.trim(),
+            tokenHeader: form.auth.tokenHeader.trim(),
+            tokenPrefix: form.auth.tokenPrefix,
+          },
+          tls: { mode: form.tls.mode, caPem: form.tls.caPem },
+        },
+        headerValues,
       }
     }
 
@@ -811,6 +917,38 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function GroupCard({ group, t, onEdit, onLogin, onDelete, deleting, setDeleting }) {
+      const auth = group.auth ?? {}
+      const authLabel = auth.mode === 'login' ? t('authLogin') : auth.mode === 'static' ? t('authStatic') : t('authNone')
+      const authState = auth.status === 'expired' ? t('authExpired') : auth.status === 'captured' ? t('authCaptured') : t('authMissing')
+      const connected = (group.members ?? []).filter((member) => member.state === 'connected').length
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, padding: '2px 0 0' } },
+        h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' } },
+          h('div', { style: { minWidth: 0, flex: 1 } },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+              h('span', { style: { fontWeight: 700, fontSize: 15, color: C.text } }, group.name),
+              h(Badge, { color: C.brand }, t('groups')),
+              h(Badge, null, `${group.serviceCount} ${t('groupServiceCount')}`),
+              h(Badge, null, `${connected} ${t('enabled')}`),
+              h(Badge, null, `${t('auth')}: ${authLabel} · ${authState}`),
+              auth.masked ? h(Badge, null, `${t('authMasked')}: ${auth.masked}`) : null,
+              auth.expiresAt ? h(Badge, null, `${t('expiresAt')}: ${formatTime(auth.expiresAt)}`) : null,
+            ),
+          ),
+          h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' } },
+            auth.mode === 'login' ? h('button', { type: 'button', style: buttonStyle('ghost'), onClick: () => onLogin(group) }, auth.status === 'captured' ? t('relogin') : t('groupLogin')) : null,
+            h('button', { type: 'button', style: buttonStyle('ghost'), onClick: () => onEdit(group) }, t('edit')),
+            deleting === group.id
+              ? h('span', { style: { display: 'inline-flex', gap: 6 } },
+                  h('button', { type: 'button', style: buttonStyle('danger'), onClick: () => onDelete(group) }, t('confirmDelete')),
+                  h('button', { type: 'button', style: buttonStyle('ghost'), onClick: () => setDeleting(undefined) }, t('cancel')),
+                )
+              : h('button', { type: 'button', style: buttonStyle('danger'), onClick: () => setDeleting(group.id) }, t('delete')),
+          ),
+        ),
+      )
+    }
+
     function ServerCard({ server, t, onEdit, onTest, onToggle, onDelete, onLogin, deleting, setDeleting, test, busy }) {
       const state = server.enabled === false ? 'disabled' : server.status?.state ?? 'idle'
       const color = STATUS_COLOR[state] ?? C.idle
@@ -829,6 +967,7 @@ window.__ModuleLoader__.load({
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
               h('span', { style: { fontWeight: 700, fontSize: 14, color: C.text } }, server.name),
               h(Badge, null, server.transport),
+              server.groupId ? h(Badge, { color: C.brand }, `${t('inGroup')} · ${server.groupName || server.groupId}`) : null,
               server.status?.protocolVersion ? h(Badge, null, `MCP ${server.status.protocolVersion}`) : null,
               h(Badge, { color }, statusLabel(server, t)),
               server.enabled !== false && server.status?.toolCount > 0 ? h(Badge, null, `${server.status.toolCount} ${t('tools')}`) : null,
@@ -856,7 +995,7 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', style: buttonStyle('ghost', testing), disabled: testing, onClick: () => onTest(server) },
                 testing ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, h(Spinner), t('testing')) : t('test')),
               h('button', { type: 'button', style: buttonStyle('ghost'), onClick: () => onEdit(server) }, t('edit')),
-              authMode === 'login' ? h('button', { type: 'button', style: buttonStyle('ghost'), onClick: () => onLogin(server) }, server.auth?.status === 'captured' ? t('relogin') : t('login')) : null,
+              authMode === 'login' && !server.groupId ? h('button', { type: 'button', style: buttonStyle('ghost'), onClick: () => onLogin(server) }, server.auth?.status === 'captured' ? t('relogin') : t('login')) : null,
               deleting === server.id
                 ? h('span', { style: { display: 'inline-flex', gap: 6 } },
                     h('button', { type: 'button', style: buttonStyle('danger'), onClick: () => onDelete(server) }, t('confirmDelete')),
@@ -898,7 +1037,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function EditDialog({ server, t, onClose, onSaved, refresh, loginRequest, setLoginRequest }) {
+    function EditDialog({ server, groups, t, onClose, onSaved, refresh, loginRequest, setLoginRequest }) {
       const [form, setForm] = React.useState(() => server ? serverToForm(server) : emptyForm())
       const [error, setError] = React.useState('')
       const [busy, setBusy] = React.useState('')
@@ -1107,6 +1246,7 @@ window.__ModuleLoader__.load({
 
       const isStdio = form.transport === 'stdio'
       const showTls = !isStdio
+      const selectedGroup = (groups ?? []).find((entry) => entry.id === form.groupId)
       const authView = authInfo ?? login?.auth ?? server?.auth ?? {}
       const captured = authView.status === 'captured'
         || (typeof authView.accessTokenMasked === 'string' && authView.accessTokenMasked !== '')
@@ -1138,6 +1278,17 @@ window.__ModuleLoader__.load({
           h(Section, { title: t('basic') },
             h(Field, { label: t('name'), hint: t('nameHint'), t },
               h('input', { style: inputStyle(), placeholder: t('namePlaceholder'), value: form.name, onChange: (event) => update({ name: event.target.value }) }),
+            ),
+            h(Field, { label: t('group'), hint: t('groupHint'), t },
+              h(Select, {
+                value: form.groupId,
+                ariaLabel: t('group'),
+                options: [
+                  { value: '', label: t('standaloneAuth') },
+                  ...(groups ?? []).map((entry) => ({ value: entry.id, label: entry.name })),
+                ],
+                onChange: (groupId) => update({ groupId }),
+              }),
             ),
             h('label', { style: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 } },
               h('input', { type: 'checkbox', checked: form.enabled, onChange: (event) => update({ enabled: event.target.checked }) }),
@@ -1201,7 +1352,7 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', style: buttonStyle('ghost'), onClick: () => update({ headers: [...form.headers, { name: '', secret: true, value: '', set: false }] }) }, t('addHeader')),
             ),
           ),
-          h(Section, { title: t('authMode') },
+          form.groupId === '' ? h(Section, { title: t('authMode') },
             h(Field, { label: t('authMode'), t },
               h(Select, {
                 value: form.auth.mode,
@@ -1283,6 +1434,15 @@ window.__ModuleLoader__.load({
               ) : null,
             ) : null,
             form.auth.mode === 'static' ? h('div', { style: { fontSize: 12, color: C.muted, lineHeight: '18px' } }, t('staticHint')) : null,
+          ) : h(Section, { title: t('groupAuth') },
+            h('div', { style: { fontSize: 12, lineHeight: '18px', color: C.muted, marginBottom: 10 } }, t('groupAuthHint')),
+            selectedGroup ? h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
+              h(Badge, null, selectedGroup.name),
+              h(Badge, { color: selectedGroup.auth?.status === 'captured' ? C.success : C.error },
+                selectedGroup.auth?.status === 'captured' ? t('authCaptured') : selectedGroup.auth?.status === 'expired' ? t('authExpired') : t('authMissing')),
+              selectedGroup.auth?.masked ? h('span', { style: { fontSize: 12, color: C.muted } }, selectedGroup.auth.masked) : null,
+              selectedGroup.auth?.expiresAt ? h('span', { style: { fontSize: 12, color: C.muted } }, `${t('expiresAt')}: ${formatTime(selectedGroup.auth.expiresAt)}`) : null,
+            ) : h('div', { style: { fontSize: 12, color: C.error } }, t('groupInUse')),
           ),
           showTls ? h(Section, { title: t('tls') },
             h(Field, { label: t('tlsMode'), t },
@@ -1327,12 +1487,297 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function GroupDialog({ group, t, onClose, onSaved, refresh, loginRequest, setLoginRequest }) {
+      const [form, setForm] = React.useState(() => group ? groupToForm(group) : emptyGroupForm())
+      const [error, setError] = React.useState('')
+      const [busy, setBusy] = React.useState('')
+      const [authInfo, setAuthInfo] = React.useState(group?.auth)
+      const [login, setLogin] = React.useState(undefined)
+      const fileRef = React.useRef(null)
+      const dialogRef = React.useRef(null)
+      const openerRef = React.useRef(document.activeElement)
+
+      React.useEffect(() => {
+        const previous = document.body.style.overflow
+        document.body.style.overflow = 'hidden'
+        return () => { document.body.style.overflow = previous }
+      }, [])
+
+      const closeRef = React.useRef(onClose)
+      closeRef.current = onClose
+      React.useEffect(() => {
+        const onKey = (event) => {
+          if (document.querySelector('.dsh-mcp-gui-select-menu') !== null) return
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            closeRef.current?.()
+          }
+        }
+        document.addEventListener('keydown', onKey, true)
+        return () => document.removeEventListener('keydown', onKey, true)
+      }, [])
+
+      React.useLayoutEffect(() => {
+        const field = dialogRef.current?.querySelector('input,select,textarea')
+        const target = field ?? dialogRef.current?.querySelector('button')
+        target?.focus?.()
+        return () => {
+          const opener = openerRef.current
+          if (opener instanceof HTMLElement && opener.isConnected && typeof opener.focus === 'function') opener.focus()
+        }
+      }, [])
+
+      const loginId = login?.id ?? (loginRequest?.ownerId === form.id && loginRequest?.group === true ? loginRequest.id : undefined)
+      React.useEffect(() => {
+        if (loginId === undefined) return undefined
+        let alive = true
+        let timer
+        let stopped = false
+        const tick = async () => {
+          if (stopped) return
+          try {
+            const data = await request(`/api/login/status?id=${encodeURIComponent(loginId)}`)
+            if (!alive) return
+            setLogin((current) => ({ ...(current ?? { id: loginId }), ...data.status }))
+            if (data.status.auth !== undefined) setAuthInfo(data.status.auth)
+            if (data.status.status === 'captured' || data.status.status === 'error') {
+              stopped = true
+              clearInterval(timer)
+              if (data.status.status === 'captured') refresh()
+            }
+          } catch (failure) {
+            if (alive) {
+              stopped = true
+              clearInterval(timer)
+              const message = /过期|不存在/.test(failure.message) ? t('loginExpired') : failure.message
+              setLogin((current) => ({ ...(current ?? { id: loginId }), status: 'error', error: message }))
+            }
+          }
+        }
+        void tick()
+        timer = setInterval(tick, 1200)
+        return () => { alive = false; clearInterval(timer) }
+      }, [loginId, refresh])
+
+      const update = (patch) => setForm((current) => ({ ...current, ...patch }))
+      const updateAuth = (patch) => setForm((current) => ({ ...current, auth: { ...current.auth, ...patch } }))
+      const updateTls = (patch) => setForm((current) => ({ ...current, tls: { ...current.tls, ...patch } }))
+      const updateHeader = (index, patch) => setForm((current) => {
+        const headers = current.headers.slice()
+        headers[index] = { ...headers[index], ...patch }
+        return { ...current, headers }
+      })
+      const removeHeader = (index) => setForm((current) => ({ ...current, headers: current.headers.filter((_, i) => i !== index) }))
+
+      const save = async () => {
+        setBusy('save')
+        setError('')
+        try {
+          const data = await request('/api/groups', { body: groupToPayload(form) })
+          if (data.group?.auth !== undefined) setAuthInfo(data.group.auth)
+          update({ id: data.group.id })
+          return data.group
+        } catch (failure) {
+          setError(failure.message)
+          return undefined
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const startLogin = async (popup) => {
+        setError('')
+        try {
+          const saved = await save()
+          if (saved === undefined) { popup?.close?.(); return }
+          refresh()
+          setBusy('login')
+          const data = await request('/api/groups/login/start', { body: { id: saved.id } })
+          setLogin({ id: data.id, status: 'waiting', url: data.url })
+          setLoginRequest({ id: data.id, ownerId: saved.id, group: true })
+          if (popup && !popup.closed) popup.location.href = data.url
+          else window.open(data.url, '_blank', 'noopener,noreferrer')
+          if (popup === null) setError(t('openPopupBlocked'))
+        } catch (failure) {
+          popup?.close?.()
+          setError(failure.message)
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const openLogin = () => {
+        const popup = window.open('about:blank', '_blank')
+        void startLogin(popup)
+      }
+
+      const completeLogin = async () => {
+        if (login?.id === undefined) return
+        setBusy('complete')
+        setError('')
+        try {
+          const data = await request('/api/login/complete', { body: { id: login.id } })
+          setLogin((current) => ({ ...(current ?? {}), ...data.status }))
+          if (data.status.auth !== undefined) setAuthInfo(data.status.auth)
+          refresh()
+        } catch (failure) {
+          setError(failure.message)
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const cancelLogin = async () => {
+        if (login?.id === undefined) return
+        try { await request('/api/login/cancel', { body: { id: login.id } }) } catch {}
+        setLogin(undefined)
+        setLoginRequest(undefined)
+      }
+
+      const readCaFile = (event) => {
+        const file = event.target.files?.[0]
+        if (file === undefined) return
+        const reader = new FileReader()
+        reader.onload = () => updateTls({ caPem: String(reader.result ?? '') })
+        reader.readAsText(file)
+      }
+
+      const authView = authInfo ?? login?.auth ?? group?.auth ?? {}
+      const captured = authView.status === 'captured'
+        || (typeof authView.accessTokenMasked === 'string' && authView.accessTokenMasked !== '')
+        || (Array.isArray(authView.capturedHeaders) && authView.capturedHeaders.length > 0)
+
+      return createPortal(
+        h('div', { className: 'dsh-mcp-gui-overlay', role: 'presentation' },
+          h('div', { className: 'dsh-mcp-gui-mask', 'aria-hidden': true, onClick: onClose }),
+          h('div', {
+            ref: dialogRef, tabIndex: -1, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'mcp-gui-group-title',
+            className: 'dsh-mcp-gui-dialog-panel',
+          },
+            h('div', { className: 'dsh-mcp-gui-dialog-header' },
+              h('h2', { id: 'mcp-gui-group-title', style: { margin: 0, fontSize: 16, lineHeight: '24px', fontWeight: 500, minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: 8 } }, group ? `${t('edit')} · ${group.name}` : t('addGroup')),
+              h('button', { type: 'button', className: 'dsh-mcp-gui-dialog-close', onClick: onClose, 'aria-label': t('close') },
+                h('svg', { width: 14, height: 14, viewBox: '0 0 14 14', 'aria-hidden': true },
+                  h('path', { d: 'M3 3l8 8M11 3l-8 8', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round' }),
+                ),
+              ),
+            ),
+            h('div', { className: 'dsh-mcp-gui-dialog-body' },
+              h('div', { style: { fontSize: 12, lineHeight: '18px', color: C.muted, margin: '0 0 14px' } }, t('groupLoginHint')),
+              error ? h('div', { role: 'alert', style: { ...cardStyle({ borderColor: C.error }), color: C.error, fontSize: 12, whiteSpace: 'pre-wrap', marginBottom: 14 } }, `${t('errorTitle')}: ${error}`) : null,
+              h(Section, { title: t('basic') },
+                h(Field, { label: t('groupName'), hint: t('groupNameHint'), t },
+                  h('input', { style: inputStyle(), placeholder: t('groupNamePlaceholder'), value: form.name, onChange: (event) => update({ name: event.target.value }) }),
+                ),
+              ),
+              h(Section, { title: t('authMode') },
+                h(Field, { label: t('authMode'), t },
+                  h(Select, {
+                    value: form.auth.mode,
+                    ariaLabel: t('authMode'),
+                    options: [
+                      { value: 'none', label: t('authNoneOption') },
+                      { value: 'login', label: t('authLoginOption') },
+                      { value: 'static', label: t('authStaticOption') },
+                    ],
+                    onChange: (mode) => updateAuth({ mode }),
+                  }),
+                ),
+                form.auth.mode === 'login' ? h('div', null,
+                  h(Field, { label: t('loginUrl'), hint: t('loginHint'), t },
+                    h('input', { style: inputStyle(), placeholder: t('loginUrlPlaceholder'), value: form.auth.loginUrl, onChange: (event) => updateAuth({ loginUrl: event.target.value }) }),
+                  ),
+                  h('details', { className: 'dsh-mcp-gui-auth-details' },
+                    h('summary', null, t('advanced')),
+                    h('div', { style: { marginTop: 10 } },
+                      h(Field, { label: t('refreshUrl'), t },
+                        h('input', { style: inputStyle(), placeholder: t('refreshUrlPlaceholder'), value: form.auth.refreshUrl, onChange: (event) => updateAuth({ refreshUrl: event.target.value }) }),
+                      ),
+                      h(Field, { label: t('tokenHeader'), hint: t('tokenHeaderHint'), t },
+                        h('input', { style: inputStyle(), placeholder: 'X-Token / Authorization', value: form.auth.tokenHeader, onChange: (event) => updateAuth({ tokenHeader: event.target.value }) }),
+                      ),
+                      h(Field, { label: t('tokenPrefix'), hint: t('tokenPrefixHint'), t },
+                        h('input', { style: inputStyle(), placeholder: 'Bearer ', value: form.auth.tokenPrefix, onChange: (event) => updateAuth({ tokenPrefix: event.target.value }) }),
+                      ),
+                      h('div', { style: { marginTop: 12, fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 } }, t('capturedAuth')),
+                      captured ? h('dl', { className: 'dsh-mcp-gui-auth-grid' },
+                        h(AuthInfoRow, { key: 'status', label: t('authStatus'), value: authView.status === 'captured' ? t('authCaptured') : (authView.status || '—') }),
+                        h(AuthInfoRow, { key: 'token-type', label: t('authTokenType'), value: authView.tokenType || '—' }),
+                        h(AuthInfoRow, { key: 'access-token', label: t('authAccessToken'), value: authView.accessTokenMasked || '—' }),
+                        h(AuthInfoRow, { key: 'expires-at', label: t('authExpiresAt'), value: authView.expiresAt ? formatTime(authView.expiresAt) : t('noExpiry') }),
+                        h(AuthInfoRow, { key: 'masked', label: t('authMasked'), value: authView.masked || '—' }),
+                        h(AuthInfoRow, { key: 'record-key', label: t('authRecordKey'), value: authView.recordKey || '—' }),
+                      ) : h('div', { style: { fontSize: 12, color: C.muted } }, t('authNotCaptured')),
+                    ),
+                  ),
+                  h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 } },
+                    h('button', { type: 'button', style: buttonStyle('primary', busy === 'login'), disabled: busy === 'login' || form.auth.loginUrl.trim() === '', onClick: openLogin },
+                      busy === 'login' ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, h(Spinner), t('saving')) : t('saveAndLogin')),
+                    login?.status === 'waiting' ? h('button', { type: 'button', style: buttonStyle('ghost'), disabled: busy === 'complete', onClick: completeLogin }, t('completeLogin')) : null,
+                    login?.status === 'waiting' ? h('button', { type: 'button', style: buttonStyle('ghost'), onClick: cancelLogin }, t('cancel')) : null,
+                    login?.url ? h('a', { href: login.url, target: '_blank', rel: 'noopener noreferrer', style: { fontSize: 12, color: C.brand } }, t('openLink')) : null,
+                  ),
+                  login ? h('div', { role: 'status', style: { marginTop: 8, fontSize: 12, color: login.status === 'captured' ? C.success : login.status === 'error' ? C.error : C.muted, whiteSpace: 'pre-wrap' } },
+                    login.status === 'captured' ? t('loginCaptured') : login.status === 'error' ? `${t('loginError')}: ${login.error ?? ''}` : t('loginWaiting'),
+                  ) : null,
+                ) : null,
+                form.auth.mode === 'static' ? h('div', { style: { fontSize: 12, color: C.muted, lineHeight: '18px' } }, t('staticHint')) : null,
+              ),
+              h(Section, { title: t('headers') },
+                h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                  form.headers.map((header, index) => h(HeaderRow, { key: index, header, index, update: updateHeader, remove: removeHeader, t })),
+                  h('button', { type: 'button', style: buttonStyle('ghost'), onClick: () => update({ headers: [...form.headers, { name: '', secret: true, value: '', set: false }] }) }, t('addHeader')),
+                ),
+              ),
+              h(Section, { title: t('tls') },
+                h(Field, { label: t('tlsMode'), t },
+                  h(Select, {
+                    value: form.tls.mode,
+                    ariaLabel: t('tlsMode'),
+                    options: [
+                      { value: 'default', label: t('tlsDefault') },
+                      { value: 'ca', label: t('tlsCa') },
+                      { value: 'insecure', label: t('tlsInsecure') },
+                    ],
+                    onChange: (mode) => updateTls({ mode }),
+                  }),
+                ),
+                form.tls.mode === 'insecure' ? h('div', { style: { fontSize: 12, color: C.error, lineHeight: '18px' } }, t('tlsInsecureWarning')) : null,
+                form.tls.mode === 'ca' ? h('div', null,
+                  h(Field, { label: t('tlsCaLabel'), t },
+                    h('textarea', {
+                      style: inputStyle({ minHeight: 130, resize: 'vertical', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 11 }),
+                      placeholder: t('tlsCaPlaceholder'), value: form.tls.caPem, onChange: (event) => updateTls({ caPem: event.target.value }),
+                    }),
+                  ),
+                  h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                    h('input', { ref: fileRef, type: 'file', accept: '.pem,.crt,.cer,text/plain', style: { display: 'none' }, onChange: readCaFile }),
+                    h('button', { type: 'button', style: buttonStyle('ghost'), onClick: () => fileRef.current?.click() }, t('tlsCaFile')),
+                  ),
+                ) : null,
+              ),
+            ),
+            h('div', { className: 'dsh-mcp-gui-dialog-footer', style: { marginTop: 12 } },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' } },
+                h('button', { type: 'button', style: buttonStyle('primary', busy === 'save'), disabled: busy !== '', onClick: async () => { const saved = await save(); if (saved !== undefined) onSaved(saved) } },
+                  busy === 'save' ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, h(Spinner), t('saving')) : t('save')),
+                h('button', { type: 'button', style: buttonStyle('ghost'), onClick: onClose }, t('cancel')),
+              ),
+            ),
+          ),
+        ),
+        document.body,
+      )
+    }
+
     function App({ t }) {
-      const [state, setState] = React.useState({ loading: true, servers: [], loginSessions: [] })
+      const [state, setState] = React.useState({ loading: true, groups: [], servers: [], loginSessions: [] })
       const [error, setError] = React.useState('')
       const [notice, setNotice] = React.useState('')
       const [editing, setEditing] = React.useState(undefined)
+      const [editingGroup, setEditingGroup] = React.useState(undefined)
       const [deleting, setDeleting] = React.useState(undefined)
+      const [deletingGroup, setDeletingGroup] = React.useState(undefined)
       const [tests, setTests] = React.useState({})
       const [busy, setBusy] = React.useState('')
       const [loginRequest, setLoginRequest] = React.useState(undefined)
@@ -1340,7 +1785,7 @@ window.__ModuleLoader__.load({
       const refresh = React.useCallback(async () => {
         try {
           const data = await request('/api/state')
-          setState({ loading: false, servers: data.servers ?? [], loginSessions: data.loginSessions ?? [] })
+          setState({ loading: false, groups: data.groups ?? [], servers: data.servers ?? [], loginSessions: data.loginSessions ?? [] })
         } catch (failure) {
           setState((current) => ({ ...current, loading: false }))
           setError((current) => current || failure.message)
@@ -1401,6 +1846,46 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const deleteGroup = async (group) => {
+        setError('')
+        setBusy(`${group.id}:delete`)
+        try {
+          await request('/api/groups/delete', { body: { id: group.id } })
+          setDeletingGroup(undefined)
+          flash(t('noticeDeleted'))
+          await refresh()
+        } catch (failure) {
+          setError(failure.message)
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const startGroupLogin = async (group) => {
+        setError('')
+        const popup = window.open('about:blank', '_blank')
+        if (popup === null) setError(t('openPopupBlocked'))
+        try {
+          const data = await request('/api/groups/login/start', { body: { id: group.id } })
+          setLoginRequest({ id: data.id, ownerId: group.id, group: true })
+          setEditingGroup(group)
+          if (popup && !popup.closed) popup.location.href = data.url
+          else window.open(data.url, '_blank', 'noopener,noreferrer')
+          if (popup === null) setError(t('openPopupBlocked'))
+          flash(t('loginWaiting'))
+        } catch (failure) {
+          popup?.close?.()
+          setError(failure.message)
+        }
+      }
+
+      const onGroupSaved = async () => {
+        setError('')
+        setEditingGroup(undefined)
+        flash(t('noticeSaved'))
+        await refresh()
+      }
+
       const startLogin = async (server) => {
         setError('')
         const popup = window.open('about:blank', '_blank')
@@ -1443,6 +1928,7 @@ window.__ModuleLoader__.load({
             ),
             h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' } },
               h('button', { type: 'button', style: buttonStyle('ghost'), onClick: refresh }, t('refresh')),
+              h('button', { type: 'button', style: buttonStyle('ghost'), onClick: () => setEditingGroup({ group: undefined }) }, t('addGroup')),
               h('button', { type: 'button', style: buttonStyle('primary'), onClick: () => setEditing({ server: undefined }) }, t('add')),
             ),
           ),
@@ -1454,27 +1940,81 @@ window.__ModuleLoader__.load({
             ),
           ) : null,
           state.loading ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, color: C.muted, fontSize: 13 } }, h(Spinner, { size: 16 }), t('loading'))
-            : state.servers.length === 0
+            : state.groups.length === 0 && state.servers.length === 0
               ? (error === '' ? h('div', { style: cardStyle({ textAlign: 'center', padding: '40px 20px' }) },
                   h('div', { style: { fontSize: 14, color: C.text, marginBottom: 6 } }, t('empty')),
                   h('button', { type: 'button', style: buttonStyle('primary'), onClick: () => setEditing({ server: undefined }) }, t('emptyAction')),
                 ) : null)
-              : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
-                  state.servers.map((server) => h(ServerCard, {
-                    key: server.id,
-                    server,
-                    t,
-                    onEdit: (item) => setEditing({ server: item }),
-                    onTest: testServer,
-                    onToggle: toggleServer,
-                    onDelete: deleteServer,
-                    onLogin: startLogin,
-                    deleting,
-                    setDeleting,
-                    test: tests[server.id],
-                    busy,
-                  })),
+              : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+                  state.groups.map((group) => {
+                    const members = state.servers.filter((server) => server.groupId === group.id)
+                    return h('section', {
+                      key: group.id,
+                      'aria-label': group.name,
+                      style: {
+                        display: 'flex', flexDirection: 'column', gap: 10,
+                        background: C.layer2, borderRadius: 14, padding: '12px 0 14px',
+                      },
+                    },
+                      h(GroupCard, {
+                        group,
+                        t,
+                        onEdit: (item) => setEditingGroup({ group: item }),
+                        onLogin: startGroupLogin,
+                        onDelete: deleteGroup,
+                        deleting: deletingGroup,
+                        setDeleting: setDeletingGroup,
+                      }),
+                      members.length === 0
+                        ? h('div', { style: { fontSize: 12, lineHeight: '18px', color: C.muted, padding: '2px 4px 4px' } }, t('groupEmpty'))
+                        : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                            members.map((server) => h(ServerCard, {
+                              key: server.id,
+                              server,
+                              t,
+                              onEdit: (item) => setEditing({ server: item }),
+                              onTest: testServer,
+                              onToggle: toggleServer,
+                              onDelete: deleteServer,
+                              onLogin: startLogin,
+                              deleting,
+                              setDeleting,
+                              test: tests[server.id],
+                              busy,
+                            })),
+                          ),
+                    )
+                  }),
+                  state.servers.filter((server) => !server.groupId).length > 0
+                    ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                        h('div', { style: { fontSize: 13, fontWeight: 600, color: C.muted } }, t('standaloneServices')),
+                        state.servers.filter((server) => !server.groupId).map((server) => h(ServerCard, {
+                          key: server.id,
+                          server,
+                          t,
+                          onEdit: (item) => setEditing({ server: item }),
+                          onTest: testServer,
+                          onToggle: toggleServer,
+                          onDelete: deleteServer,
+                          onLogin: startLogin,
+                          deleting,
+                          setDeleting,
+                          test: tests[server.id],
+                          busy,
+                        })),
+                      )
+                    : null,
                 ),
+          editingGroup ? h(GroupDialog, {
+            key: editingGroup.group?.id ?? 'new-group',
+            group: editingGroup.group,
+            t,
+            onClose: () => { setEditingGroup(undefined); setLoginRequest(undefined) },
+            onSaved: onGroupSaved,
+            refresh,
+            loginRequest,
+            setLoginRequest,
+          }) : null,
           state.loginSessions.length > 0
             ? h('div', { style: { marginTop: 16, fontSize: 12, color: C.muted } }, `${t('loginInProgress')}: ${state.loginSessions.length}`)
             : null,
@@ -1482,6 +2022,7 @@ window.__ModuleLoader__.load({
         editing ? h(EditDialog, {
           key: editing.server?.id ?? 'new',
           server: editing.server,
+          groups: state.groups,
           t,
           onClose: () => { setEditing(undefined); setLoginRequest(undefined) },
           onSaved,
